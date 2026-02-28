@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  edge:
+    build:
+      context: .
+      dockerfile: edge/Dockerfile
+    container_name: streambed-edge
+    ports:
+      - "8000:8000"
+    volumes:
+      - edge-data:/data/streambed
+    environment:
+      - DEVICE_ID=edge-001
+      - STORAGE_DIR=/data/streambed
+      - VIDEO_SOURCE=0
+      - SERVER_HOST=server
+      - SERVER_PORT=9000
+      - MODEL_DEVICE=cpu
+    depends_on:
+      - server
+    networks:
+      - streambed-net
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: streambed-server
+    ports:
+      - "8001:8001"
+      - "9000:9000"
+    volumes:
+      - server-data:/data/streambed
+    environment:
+      - DEVICE_ID=server-001
+      - STORAGE_DIR=/data/streambed
+      - MODEL_DEVICE=cpu
+      - STREAM_LISTEN_PORT=9000
+    networks:
+      - streambed-net
+
+volumes:
+  edge-data:
+  server-data:
+
+networks:
+  streambed-net:
+    driver: bridge

@@ -1,4 +1,0 @@
-# Add dependencies as needed, e.g.:
-# fastapi
-# uvicorn
-# httpx  # for proxying to controller nodes

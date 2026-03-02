@@ -13,7 +13,7 @@ app = FastAPI(title="StreamBed Controller Node")
 class HeartbeatRequest(BaseModel):
     device_cluster: str
     device_id: str
-    current_model: str | None = None
+    current_model_version: str | None = None
     status: HeartbeatStatus | str | None = None
 
 
@@ -94,7 +94,7 @@ def receive_heartbeat(body: HeartbeatRequest) -> dict:
         update_heartbeat(
             body.device_cluster,
             body.device_id,
-            body.current_model,
+            body.current_model_version,
             body.status,
         )
         return {"ok": True}

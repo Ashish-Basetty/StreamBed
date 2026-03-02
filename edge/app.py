@@ -4,6 +4,7 @@ import time
 import uuid
 
 import cv2
+import httpx
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -14,7 +15,6 @@ from shared.inference.mobilenet import MobileNetV2Model
 from shared.storage.frame_store import FrameStore
 from shared.storage.ttl_manager import TTLManager
 from shared.api.retrieval import create_retrieval_router
-from shared.interfaces.controller_interface import get_controller
 from shared.interfaces.stream_interface import MockStreamSender, StreamFrame
 from edge_config import (
     API_HOST,
@@ -35,7 +35,6 @@ from edge_config import (
 model = MobileNetV2Model(device=MODEL_DEVICE)
 store = FrameStore(base_dir=STORAGE_DIR)
 ttl_mgr = TTLManager(storage_path=STORAGE_DIR, max_ttl=TTL_MAX, min_ttl=TTL_MIN)
-controller = get_controller(CONTROLLER_URL, DEVICE_CLUSTER)
 sender = MockStreamSender()
 
 
@@ -94,10 +93,20 @@ async def ttl_cleanup_loop():
 async def heartbeat_loop():
     """Send status heartbeats to the controller."""
     while True:
-        await controller.report_status(
-            DEVICE_ID,
-            {"current_model": model.get_model_version(), "status": "Active"},
-        )
+        if CONTROLLER_URL and CONTROLLER_URL.strip():
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    await client.post(
+                        f"{CONTROLLER_URL.rstrip('/')}/heartbeat",
+                        json={
+                            "device_cluster": DEVICE_CLUSTER,
+                            "device_id": DEVICE_ID,
+                            "current_model_version": model.get_model_version(),
+                            "status": "Active",
+                        },
+                    )
+            except Exception as e:
+                print(f"[Edge] heartbeat failed: {e}")
         await asyncio.sleep(30)
 
 
@@ -107,7 +116,17 @@ async def lifespan(app: FastAPI):
     model.load()
     print("[Edge] Model loaded.")
 
-    await controller.register(DEVICE_ID, "edge", model.get_model_version())
+    if CONTROLLER_URL and CONTROLLER_URL.strip():
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{CONTROLLER_URL.rstrip('/')}/register",
+                json={
+                    "device_cluster": DEVICE_CLUSTER,
+                    "device_id": DEVICE_ID,
+                    "device_type": "edge",
+                    "current_model_version": model.get_model_version(),
+                },
+            )
     await sender.connect(SERVER_HOST, SERVER_PORT)
 
     capture_task = asyncio.create_task(video_capture_loop())

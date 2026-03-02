@@ -1,0 +1,8 @@
+# Controller runtime data
+controller/data/
+
+# Deployment testing
+deployment_testing/controller-data/
+deployment_testing/daemon-data/
+deployment_testing/daemon-edge-data/
+deployment_testing/daemon-server-data/

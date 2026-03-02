@@ -1,6 +1,8 @@
 import os
 
 DEVICE_ID = os.getenv("DEVICE_ID", "server-001")
+DEVICE_CLUSTER = os.getenv("DEVICE_CLUSTER", "default")
+CONTROLLER_URL = os.getenv("CONTROLLER_URL", "")  # e.g. http://controller:8080
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data/streambed")
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8001"))

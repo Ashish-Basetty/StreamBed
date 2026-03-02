@@ -1,6 +1,18 @@
 version: "3.9"
 
 services:
+  controller:
+    build:
+      context: .
+      dockerfile: controller/ControllerNode/Dockerfile
+    container_name: streambed-controller
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./controller/data:/app/data
+    networks:
+      - streambed-net
+
   edge:
     build:
       context: .
@@ -12,12 +24,15 @@ services:
       - edge-data:/data/streambed
     environment:
       - DEVICE_ID=edge-001
+      - DEVICE_CLUSTER=default
+      - CONTROLLER_URL=http://controller:8080
       - STORAGE_DIR=/data/streambed
       - VIDEO_SOURCE=0
       - SERVER_HOST=server
       - SERVER_PORT=9000
       - MODEL_DEVICE=cpu
     depends_on:
+      - controller
       - server
     networks:
       - streambed-net
@@ -34,6 +49,8 @@ services:
       - server-data:/data/streambed
     environment:
       - DEVICE_ID=server-001
+      - DEVICE_CLUSTER=default
+      - CONTROLLER_URL=http://controller:8080
       - STORAGE_DIR=/data/streambed
       - MODEL_DEVICE=cpu
       - STREAM_LISTEN_PORT=9000

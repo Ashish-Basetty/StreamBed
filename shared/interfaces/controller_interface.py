@@ -1,13 +1,10 @@
-"""Interface stub for the StreamBed Controller (Ashish's component).
-
-BLOCKER: The actual controller API is not yet implemented.
-This file defines the contract and provides a MockController for development.
-Once Ashish's controller is ready, implement ControllerInterface with real logic.
-"""
+"""Controller interface for StreamBed. Integrates with Ashish's controller API."""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
+
+import httpx
 
 
 @dataclass
@@ -70,3 +67,60 @@ class MockController(ControllerInterface):
 
     async def report_status(self, device_id, status):
         pass
+
+
+class RealController(ControllerInterface):
+    """HTTP client for Ashish's StreamBed controller. Uses push-based model updates."""
+
+    def __init__(self, base_url: str, device_cluster: str = "default"):
+        self._base_url = base_url.rstrip("/")
+        self._device_cluster = device_cluster
+
+    async def register(
+        self, device_id: str, device_type: str, current_model_version: str
+    ) -> bool:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{self._base_url}/register",
+                json={
+                    "device_cluster": self._device_cluster,
+                    "device_id": device_id,
+                    "device_type": device_type,
+                    "current_model_version": current_model_version,
+                },
+            )
+            resp.raise_for_status()
+            return True
+
+    async def check_for_update(
+        self, device_id: str, current_version: str
+    ) -> Optional[ModelUpdate]:
+        return None  # Push model: controller initiates deploys, no polling
+
+    async def apply_update(self, update: ModelUpdate, model) -> bool:
+        return False  # Push model: controller deploys containers directly
+
+    async def report_status(self, device_id: str, status: dict) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
+                    f"{self._base_url}/heartbeat",
+                    json={
+                        "device_cluster": self._device_cluster,
+                        "device_id": device_id,
+                        "current_model": status.get("current_model"),
+                        "status": status.get("status"),
+                    },
+                )
+        except Exception as e:
+            print(f"[RealController] heartbeat failed: {e}")
+
+
+def get_controller(
+    controller_url: Optional[str] = None,
+    device_cluster: str = "default",
+) -> ControllerInterface:
+    """Return RealController if controller_url is set, else MockController."""
+    if controller_url:
+        return RealController(controller_url, device_cluster)
+    return MockController()

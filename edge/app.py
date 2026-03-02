@@ -14,12 +14,14 @@ from shared.inference.mobilenet import MobileNetV2Model
 from shared.storage.frame_store import FrameStore
 from shared.storage.ttl_manager import TTLManager
 from shared.api.retrieval import create_retrieval_router
-from shared.interfaces.controller_interface import MockController
+from shared.interfaces.controller_interface import get_controller
 from shared.interfaces.stream_interface import MockStreamSender, StreamFrame
 from edge_config import (
     API_HOST,
     API_PORT,
     CLEANUP_INTERVAL,
+    CONTROLLER_URL,
+    DEVICE_CLUSTER,
     DEVICE_ID,
     MODEL_DEVICE,
     SERVER_HOST,
@@ -33,7 +35,7 @@ from edge_config import (
 model = MobileNetV2Model(device=MODEL_DEVICE)
 store = FrameStore(base_dir=STORAGE_DIR)
 ttl_mgr = TTLManager(storage_path=STORAGE_DIR, max_ttl=TTL_MAX, min_ttl=TTL_MIN)
-controller = MockController()
+controller = get_controller(CONTROLLER_URL, DEVICE_CLUSTER)
 sender = MockStreamSender()
 
 
@@ -89,6 +91,16 @@ async def ttl_cleanup_loop():
         await asyncio.sleep(CLEANUP_INTERVAL)
 
 
+async def heartbeat_loop():
+    """Send status heartbeats to the controller."""
+    while True:
+        await controller.report_status(
+            DEVICE_ID,
+            {"current_model": model.get_model_version(), "status": "Active"},
+        )
+        await asyncio.sleep(30)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("[Edge] Loading model...")
@@ -100,11 +112,13 @@ async def lifespan(app: FastAPI):
 
     capture_task = asyncio.create_task(video_capture_loop())
     cleanup_task = asyncio.create_task(ttl_cleanup_loop())
+    heartbeat_task = asyncio.create_task(heartbeat_loop())
 
     yield
 
     capture_task.cancel()
     cleanup_task.cancel()
+    heartbeat_task.cancel()
     await sender.close()
 
 

@@ -1,0 +1,50 @@
+services:
+  controller:
+    build:
+      context: ..
+      dockerfile: controller/ControllerNode/Dockerfile
+    container_name: deploy-test-controller
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./controller-data:/app/data
+    networks:
+      - deploy-test-net
+
+  deploymentdaemon-edge:
+    build:
+      context: ..
+      dockerfile: controller/DeploymentDaemon/Dockerfile
+    container_name: deploy-test-daemon-edge
+    ports:
+      - "9090:9090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./daemon-edge-data:/app/data
+    environment:
+      - STREAMBED_CONFIG_HOST_PATH=${PWD}/daemon-edge-data
+      - STREAMBED_HOST_PORT=8082
+      - STREAMBED_CONTAINER_PORT=8000
+    networks:
+      - deploy-test-net
+
+  deploymentdaemon-server:
+    build:
+      context: ..
+      dockerfile: controller/DeploymentDaemon/Dockerfile
+    container_name: deploy-test-daemon-server
+    ports:
+      - "9091:9090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./daemon-server-data:/app/data
+    environment:
+      - STREAMBED_CONFIG_HOST_PATH=${PWD}/daemon-server-data
+      - STREAMBED_HOST_PORT=8083
+      - STREAMBED_CONTAINER_PORT=8000
+    networks:
+      - deploy-test-net
+
+networks:
+  deploy-test-net:
+    driver: bridge

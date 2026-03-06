@@ -103,8 +103,6 @@ echo ""
 
 if echo "$RESP_SERVER" | grep -q '"ok":true' && echo "$RESP_EDGE" | grep -q '"ok":true'; then
   echo "=== Deploy succeeded ==="
-  echo "Server API: http://localhost:8083/api/v1/health"
-  echo "Edge API: http://localhost:8082/api/v1/health"
   exit 0
 else
   echo "=== Deploy failed ==="

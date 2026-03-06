@@ -29,6 +29,7 @@ services:
       - DEVICE_ID=edge-001
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=deploymentdaemon-edge
+      - VIDEO_SOURCE=/config/OnboardingLoop.mp4
     networks:
       - deploy-test-net
 

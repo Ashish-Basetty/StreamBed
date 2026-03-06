@@ -25,6 +25,10 @@ services:
       - STREAMBED_CONFIG_HOST_PATH=${PWD}/daemon-edge-data
       - STREAMBED_HOST_PORT=8082
       - STREAMBED_CONTAINER_PORT=8000
+      - CONTROLLER_URL=http://controller:8080
+      - DEVICE_ID=edge-001
+      - DEVICE_CLUSTER=default
+      - DAEMON_ADDRESS=deploymentdaemon-edge
     networks:
       - deploy-test-net
 
@@ -42,6 +46,10 @@ services:
       - STREAMBED_CONFIG_HOST_PATH=${PWD}/daemon-server-data
       - STREAMBED_HOST_PORT=8083
       - STREAMBED_CONTAINER_PORT=8000
+      - CONTROLLER_URL=http://controller:8080
+      - DEVICE_ID=server-001
+      - DEVICE_CLUSTER=default
+      - DAEMON_ADDRESS=deploymentdaemon-server
     networks:
       - deploy-test-net
 

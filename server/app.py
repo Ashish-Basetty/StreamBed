@@ -84,18 +84,6 @@ async def lifespan(app: FastAPI):
     model.load()
     print("[Server] Model loaded.")
 
-    if CONTROLLER_URL and CONTROLLER_URL.strip():
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"{CONTROLLER_URL.rstrip('/')}/register",
-                json={
-                    "device_cluster": DEVICE_CLUSTER,
-                    "device_id": DEVICE_ID,
-                    "device_type": "server",
-                    "current_model_version": model.get_model_version(),
-                },
-            )
-
     receive_task = asyncio.create_task(stream_receive_loop())
     cleanup_task = asyncio.create_task(ttl_cleanup_loop())
     heartbeat_task = asyncio.create_task(heartbeat_loop())

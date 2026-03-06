@@ -116,17 +116,6 @@ async def lifespan(app: FastAPI):
     model.load()
     print("[Edge] Model loaded.")
 
-    if CONTROLLER_URL and CONTROLLER_URL.strip():
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"{CONTROLLER_URL.rstrip('/')}/register",
-                json={
-                    "device_cluster": DEVICE_CLUSTER,
-                    "device_id": DEVICE_ID,
-                    "device_type": "edge",
-                    "current_model_version": model.get_model_version(),
-                },
-            )
     await sender.connect(SERVER_HOST, SERVER_PORT)
 
     capture_task = asyncio.create_task(video_capture_loop())

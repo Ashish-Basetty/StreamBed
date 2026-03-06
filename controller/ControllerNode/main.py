@@ -1,13 +1,23 @@
 """StreamBed controller node - SQLite-backed API server."""
+from contextlib import asynccontextmanager
+
+import os
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from db import get_connection, init_db, register_device, update_heartbeat
-from deploy import DeployError, DeviceNotFoundError, deploy_to_device
+from deploy import DeployError, DeviceNotFoundError, deploy_to_device, delete_container_from_device
 from heartbeat_spec import HeartbeatStatus
 
-app = FastAPI(title="StreamBed Controller Node")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="StreamBed Controller Node", lifespan=lifespan)
 
 
 class HeartbeatRequest(BaseModel):
@@ -20,8 +30,8 @@ class HeartbeatRequest(BaseModel):
 class RegisterRequest(BaseModel):
     device_cluster: str
     device_id: str
-    device_type: str  # e.g. "edge" or "server"
-    current_model_version: str
+    ip: str | None = None  # override client address (e.g. hostname for testing)
+    port: int | None = None  # override daemon port (default 9090)
 
 
 class DeployRequest(BaseModel):
@@ -31,10 +41,9 @@ class DeployRequest(BaseModel):
     host_port: int | None = None  # defaults to daemon's STREAMBED_HOST_PORT
     container_port: int | None = None  # defaults to daemon's STREAMBED_CONTAINER_PORT
 
-
-@app.on_event("startup")
-def startup() -> None:
-    init_db()
+class DeleteRequest(BaseModel):
+    device_cluster: str
+    device_id: str
 
 
 @app.get("/health")
@@ -45,9 +54,16 @@ def health() -> dict:
 
 @app.post("/register")
 def register_device_endpoint(request: Request, body: RegisterRequest) -> dict:
-    """Register a device. IP is taken from the request's client address."""
-    ip = request.client.host if request.client else "0.0.0.0"
-    register_device(body.device_cluster, body.device_id, ip, body.device_type)
+    """Register a device. IP/port from body if provided, else request client address."""
+    ip = body.ip or (request.client.host if request.client else "0.0.0.0")
+    port = body.port
+    register_device(body.device_cluster, body.device_id, ip, port)
+    return {"ok": True, "device_cluster": body.device_cluster, "device_id": body.device_id}
+
+@app.post("/deregister")
+def deregister_device_endpoint(request: Request, body: RegisterRequest) -> dict:
+    """Deregister a device. IP/port from body if provided, else request client address."""
+    deregister_device(body.device_cluster, body.device_id)
     return {"ok": True, "device_cluster": body.device_cluster, "device_id": body.device_id}
 
 
@@ -79,13 +95,28 @@ def deploy_container(body: DeployRequest) -> dict:
             body.image,
             body.host_port,
             body.container_port,
+            controller_url=os.environ.get("CONTROLLER_URL")
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except DeviceNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except DeployError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+@app.delete("/delete")
+def delete_container(body: DeleteRequest) -> dict:
+    try:
+        result = delete_container_from_device(
+            body.device_cluster,
+            body.device_id,
         )
         return result
     except DeviceNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except DeployError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
-
 
 @app.post("/heartbeat")
 def receive_heartbeat(body: HeartbeatRequest) -> dict:

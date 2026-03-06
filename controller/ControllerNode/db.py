@@ -52,6 +52,11 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_devices_cluster ON devices(device_cluster);
             CREATE INDEX IF NOT EXISTS idx_status_heartbeat ON device_status(last_heartbeat);
         """)
+        # Migration: add port column if missing (daemon listen port, default 9090)
+        try:
+            conn.execute("ALTER TABLE devices ADD COLUMN port INTEGER")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.commit()
     finally:
         conn.close()
@@ -61,22 +66,52 @@ def register_device(
     device_cluster: str,
     device_id: str,
     ip: str,
-    device_type: str | None = None,
+    port: int | None = None,
 ) -> None:
     """Register or update a device in the registry."""
     conn = get_connection()
     try:
         conn.execute(
             """
-            INSERT INTO devices (device_cluster, device_id, ip, registered_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO devices (device_cluster, device_id, ip, port, registered_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(device_cluster, device_id) DO UPDATE SET
                 ip = excluded.ip,
+                port = excluded.port,
                 registered_at = CURRENT_TIMESTAMP
             """,
-            (device_cluster, device_id, ip),
+            (device_cluster, device_id, ip, port),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+def deregister_device(
+    device_cluster: str,
+    device_id: str,
+) -> None:
+    """Deregister a device from the registry."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM devices WHERE device_cluster = ? AND device_id = ?",
+            (device_cluster, device_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_device_address(device_cluster: str, device_id: str) -> tuple[str, int] | None:
+    """Look up device (ip, port) by cluster and device id. Returns None if not found."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT ip, port FROM devices WHERE device_cluster = ? AND device_id = ?",
+            (device_cluster, device_id),
+        ).fetchone()
+        if not row:
+            return None
+        return (row["ip"], row["port"] if row["port"] is not None else 9090)
     finally:
         conn.close()
 

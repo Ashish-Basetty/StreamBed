@@ -47,39 +47,13 @@ for i in {1..30}; do
   fi
 done
 
-# 1. Register both daemons (use hostnames so controller can reach them)
-echo ""
-echo "1. Registering daemon-edge with controller..."
-curl -s -X POST "$CONTROLLER_URL/register" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"device_cluster\": \"$DEVICE_CLUSTER\",
-    \"device_id\": \"daemon-edge\",
-    \"device_type\": \"daemon\",
-    \"current_model_version\": \"test\",
-    \"ip\": \"deploymentdaemon-edge\"
-  }" | jq . 2>/dev/null || cat
-echo ""
-
-echo "2. Registering daemon-server with controller..."
-curl -s -X POST "$CONTROLLER_URL/register" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"device_cluster\": \"$DEVICE_CLUSTER\",
-    \"device_id\": \"daemon-server\",
-    \"device_type\": \"daemon\",
-    \"current_model_version\": \"test\",
-    \"ip\": \"deploymentdaemon-server\"
-  }" | jq . 2>/dev/null || cat
-echo ""
-
-# 3. Deploy server
-echo "3. Deploying server to daemon-server..."
+# Deploy server
+echo "Deploying server to daemon-server..."
 RESP_SERVER=$(curl -s -X POST "$CONTROLLER_URL/deploy" \
   -H "Content-Type: application/json" \
   -d "{
     \"device_cluster\": \"$DEVICE_CLUSTER\",
-    \"device_id\": \"daemon-server\",
+    \"device_id\": \"server-001\",
     \"image\": \"$SERVER_IMAGE\",
     \"host_port\": 8083,
     \"container_port\": 8001
@@ -87,13 +61,13 @@ RESP_SERVER=$(curl -s -X POST "$CONTROLLER_URL/deploy" \
 echo "$RESP_SERVER" | jq . 2>/dev/null || echo "$RESP_SERVER"
 echo ""
 
-# 4. Deploy edge
-echo "4. Deploying edge to daemon-edge..."
+# Deploy edge
+echo "Deploying edge to daemon-edge..."
 RESP_EDGE=$(curl -s -X POST "$CONTROLLER_URL/deploy" \
   -H "Content-Type: application/json" \
   -d "{
     \"device_cluster\": \"$DEVICE_CLUSTER\",
-    \"device_id\": \"daemon-edge\",
+    \"device_id\": \"edge-001\",
     \"image\": \"$EDGE_IMAGE\",
     \"host_port\": 8082,
     \"container_port\": 8000

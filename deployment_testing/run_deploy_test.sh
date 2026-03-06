@@ -32,6 +32,21 @@ for i in {1..30}; do
   fi
 done
 
+# Wait for daemons to be ready (controller reaches them by hostname, we check via host ports)
+echo ""
+echo "Waiting for daemons..."
+for i in {1..30}; do
+  if curl -s "http://localhost:9090/health" >/dev/null 2>&1 && curl -s "http://localhost:9091/health" >/dev/null 2>&1; then
+    echo "Daemons ready."
+    break
+  fi
+  sleep 1
+  if [ $i -eq 30 ]; then
+    echo "Daemons not ready. Ensure: cd deployment_testing && docker compose up -d"
+    exit 1
+  fi
+done
+
 # 1. Register both daemons (use hostnames so controller can reach them)
 echo ""
 echo "1. Registering daemon-edge with controller..."
@@ -93,5 +108,8 @@ if echo "$RESP_SERVER" | grep -q '"ok":true' && echo "$RESP_EDGE" | grep -q '"ok
   exit 0
 else
   echo "=== Deploy failed ==="
+  echo "Server error: $(echo "$RESP_SERVER" | jq -r '.detail // .error // .' 2>/dev/null)"
+  echo "Edge error: $(echo "$RESP_EDGE" | jq -r '.detail // .error // .' 2>/dev/null)"
+  echo "Check daemon logs: docker logs deploy-test-daemon-server && docker logs deploy-test-daemon-edge"
   exit 1
 fi

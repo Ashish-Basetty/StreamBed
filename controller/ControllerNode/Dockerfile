@@ -3,6 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Copy application code (build context is project root when used from docker-compose)
+COPY shared/ /app/shared/
 COPY controller/ControllerNode/ .
 
 # Install dependencies

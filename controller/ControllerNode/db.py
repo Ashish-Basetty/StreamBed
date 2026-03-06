@@ -2,7 +2,7 @@
 import sqlite3
 from pathlib import Path
 
-from heartbeat_spec import HeartbeatStatus
+from shared.interfaces.heartbeat_spec import HeartbeatStatus
 
 DB_PATH = Path(__file__).parent / "data" / "controller.db"
 

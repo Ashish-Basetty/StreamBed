@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from db import get_connection, init_db, register_device, update_heartbeat
 from deploy import DeployError, DeviceNotFoundError, deploy_to_device, delete_container_from_device
-from heartbeat_spec import HeartbeatStatus
+from shared.interfaces.heartbeat_spec import HeartbeatStatus
 
 
 @asynccontextmanager

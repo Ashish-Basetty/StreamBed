@@ -14,6 +14,9 @@ A separate PUT request is used to update a list of specified devices with the do
 \
 The request will then be shard routed to the controller workers, which each contain a map of `device_cluster`/`device_id` to IP. The controller workers then send deployment requests to the corresponding devices, which each have a locally running deployment daemon. When sent a request, the daemon pulls in a docker container from dockerhub, launches it, and reroutes data input/output through this container. Once everything looks good to go, the daemon then deletes the old container.
 
+## Storage
+Edge systems must be fault-tolerant in lossy network/central server failure. The controller manages storage in SQLite (lightweight, file-based database) on the edge device that continues to operate, even offline (sync when connectivitiy returns). This enables the system to be eventually consistent.
+
 ## Container Sharding
 The system is designed to scale to unknown number of servers/devices. Each `device_cluster` represents a grouping of servers and edge devices designed to work together. The `device_cluster` is hashed, and requests are sent to the corresponding controller based on the hash. \
 \

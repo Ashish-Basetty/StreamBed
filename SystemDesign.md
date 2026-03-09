@@ -24,6 +24,21 @@ The protocol also includes a handshake system to synchronize updates to streamin
 
 We choose the UDP approach because of the minimal overhead, extendible data/metadata, and continuous framing. Plain HTTP/REST has high per-frame overheads (hard to stream); TCP sockets introduce custom framing complexity and more overhead than UDP; WebSocket/gRPCs require extra dependencies while still using TCP; and Manual Polling on edge devices is simple but lacks scalability and loses on the real-time aspect.
 
+Packet format:
+
+- Header (32 bytes, big-endian):
+  - timestamp (8 bytes, double)
+  - model_ver_len (4 bytes, uint32)
+  - source_id_len (4 bytes, uint32)
+  - interleaving_rate (8 bytes, double; -1.0 if None)
+  - frame_len (4 bytes, uint32)
+  - embedding_len (4 bytes, uint32)
+- Body (variable):
+  - model_version (UTF-8 bytes, len=model_ver_len)
+  - source_device_id (UTF-8 bytes, len=source_id_len)
+  - frame (numpy .npy bytes, len=frame_len; empty if None)
+  - embedding (numpy .npy bytes, len=embedding_len; empty if None)
+
 ## StreamBed Controller
 
 ### Ashish

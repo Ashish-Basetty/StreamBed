@@ -12,6 +12,20 @@ for unit tests or offline development.
 The binary protocol includes a fixed-size header with metadata (timestamps,
 model version, source device ID, frame interleaving rate) followed by
 serialized numpy arrays for frames/embeddings.
+
+Packet format:
+- Header (48 bytes, big-endian):
+  - timestamp (8 bytes, double)
+  - model_ver_len (4 bytes, uint32)
+  - source_id_len (4 bytes, uint32)
+  - interleaving_rate (8 bytes, double; -1.0 if None)
+  - frame_len (4 bytes, uint32)
+  - embedding_len (4 bytes, uint32)
+- Body (variable):
+  - model_version (UTF-8 bytes, len=model_ver_len)
+  - source_device_id (UTF-8 bytes, len=source_id_len)
+  - frame (numpy .npy bytes, len=frame_len; empty if None)
+  - embedding (numpy .npy bytes, len=embedding_len; empty if None)
 """
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator

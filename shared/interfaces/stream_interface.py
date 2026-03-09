@@ -14,7 +14,7 @@ model version, source device ID, frame interleaving rate) followed by
 serialized numpy arrays for frames/embeddings.
 
 Packet format:
-- Header (48 bytes, big-endian):
+- Header (32 bytes, big-endian):
   - timestamp (8 bytes, double)
   - model_ver_len (4 bytes, uint32)
   - source_id_len (4 bytes, uint32)

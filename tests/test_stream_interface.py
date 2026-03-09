@@ -10,6 +10,7 @@ def make_frame():
         embedding=None,
         model_version="v1",
         source_device_id="device123",
+        frame_interleaving_rate=30.0,
     )
 
 
@@ -44,5 +45,6 @@ def test_udp_sender_receiver_cycle():
         assert len(got) == 1
         assert got[0].timestamp == 123.45
         assert got[0].source_device_id == "device123"
+        assert got[0].frame_interleaving_rate == 30.0
 
     asyncio.run(inner())

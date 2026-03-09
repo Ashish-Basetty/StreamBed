@@ -2,12 +2,16 @@
 
 This module defines the contract between senders (edge devices) and
 receivers (servers) for the custom StreamBed UDP-based transport.  A simple
-handshake and pickle-based payload serialization are provided alongside
+handshake and binary payload serialization are provided alongside
 mock helpers for local testing.
 
 The original stub/mocks have been extended with working ``StreamBedUDPSender``
 and ``StreamBedUDPReceiver`` implementations; the mocks are still available
 for unit tests or offline development.
+
+The binary protocol includes a fixed-size header with metadata (timestamps,
+model version, source device ID, frame interleaving rate) followed by
+serialized numpy arrays for frames/embeddings.
 """
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -17,6 +21,8 @@ from typing import Optional
 import asyncio
 import pickle
 import json
+import struct
+import io
 
 import numpy as np
 
@@ -30,6 +36,82 @@ class StreamFrame:
     embedding: Optional[np.ndarray]
     model_version: str
     source_device_id: str
+    frame_interleaving_rate: Optional[float] = None  # frames per second
+
+
+def serialize_stream_frame(frame: StreamFrame) -> bytes:
+    """Serialize a StreamFrame to bytes with a binary header."""
+    model_ver_bytes = frame.model_version.encode('utf-8')
+    source_id_bytes = frame.source_device_id.encode('utf-8')
+    
+    # Serialize numpy arrays to bytes
+    frame_bytes = b''
+    if frame.frame is not None:
+        buf = io.BytesIO()
+        np.save(buf, frame.frame)
+        frame_bytes = buf.getvalue()
+    
+    embedding_bytes = b''
+    if frame.embedding is not None:
+        buf = io.BytesIO()
+        np.save(buf, frame.embedding)
+        embedding_bytes = buf.getvalue()
+    
+    # Header: timestamp (double), model_ver_len (int), source_id_len (int), 
+    # interleaving_rate (double), frame_len (int), embedding_len (int)
+    interleaving = frame.frame_interleaving_rate if frame.frame_interleaving_rate is not None else -1.0
+    header = struct.pack('>dIIdII', 
+                         frame.timestamp, 
+                         len(model_ver_bytes), 
+                         len(source_id_bytes), 
+                         interleaving, 
+                         len(frame_bytes), 
+                         len(embedding_bytes))
+    
+    return header + model_ver_bytes + source_id_bytes + frame_bytes + embedding_bytes
+
+
+def deserialize_stream_frame(data: bytes) -> StreamFrame:
+    """Deserialize bytes back to a StreamFrame."""
+    header_size = struct.calcsize('>dIIdII')
+    if len(data) < header_size:
+        raise ValueError("Data too short for header")
+    
+    header = data[:header_size]
+    timestamp, model_ver_len, source_id_len, interleaving, frame_len, embedding_len = struct.unpack('>dIIdII', header)
+    
+    offset = header_size
+    model_ver_bytes = data[offset:offset + model_ver_len]
+    offset += model_ver_len
+    source_id_bytes = data[offset:offset + source_id_len]
+    offset += source_id_len
+    frame_bytes = data[offset:offset + frame_len] if frame_len > 0 else b''
+    offset += frame_len
+    embedding_bytes = data[offset:offset + embedding_len] if embedding_len > 0 else b''
+    
+    model_version = model_ver_bytes.decode('utf-8')
+    source_device_id = source_id_bytes.decode('utf-8')
+    
+    frame = None
+    if frame_bytes:
+        buf = io.BytesIO(frame_bytes)
+        frame = np.load(buf)
+    
+    embedding = None
+    if embedding_bytes:
+        buf = io.BytesIO(embedding_bytes)
+        embedding = np.load(buf)
+    
+    frame_interleaving_rate = interleaving if interleaving >= 0 else None
+    
+    return StreamFrame(
+        timestamp=timestamp,
+        frame=frame,
+        embedding=embedding,
+        model_version=model_version,
+        source_device_id=source_device_id,
+        frame_interleaving_rate=frame_interleaving_rate,
+    )
 
 
 class StreamSenderInterface(ABC):
@@ -129,7 +211,7 @@ implementation is intentionally minimal – it always returns True from
             raise RuntimeError("sender is not connected")
 
         try:
-            payload = pickle.dumps(frame)
+            payload = serialize_stream_frame(frame)
             self._transport.sendto(payload, self._server_addr)
             return True
         except Exception as e:  # pragma: no cover - best effort
@@ -175,7 +257,7 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
                 pass
 
             try:
-                frame = pickle.loads(data)
+                frame = deserialize_stream_frame(data)
                 if isinstance(frame, StreamFrame):
                     # schedule put on the queue so we don't block the event loop
                     asyncio.create_task(self._queue.put(frame))

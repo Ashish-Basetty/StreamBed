@@ -72,6 +72,7 @@ async def video_capture_loop():
                 embedding=result.embedding,
                 model_version=model.get_model_version(),
                 source_device_id=DEVICE_ID,
+                frame_interleaving_rate=30.0,
             )
             await sender.send(sf)
 

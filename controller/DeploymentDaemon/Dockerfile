@@ -2,11 +2,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Copy application code (build context is project root when used from docker-compose)
-COPY controller/DeploymentDaemon/ .
+# Copy only requirements first (to leverage Docker caching)
+COPY controller/DeploymentDaemon/requirements.txt .
 
-# Install dependencies (add to requirements.txt as needed)
+# Install Python dependencies (only rebuilds if requirements.txt changes)
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application code
+COPY controller/DeploymentDaemon/ .
 
 # Expose daemon API port
 EXPOSE 9090

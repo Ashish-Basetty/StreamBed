@@ -15,7 +15,7 @@ from shared.inference.mobilenet import MobileNetV2Model
 from shared.storage.frame_store import FrameStore
 from shared.storage.ttl_manager import TTLManager
 from shared.api.retrieval import create_retrieval_router
-from shared.interfaces.stream_interface import MockStreamSender, StreamFrame
+from shared.interfaces.stream_interface import StreamBedUDPSender, StreamFrame
 from edge_config import (
     API_HOST,
     API_PORT,
@@ -35,7 +35,7 @@ from edge_config import (
 model = MobileNetV2Model(device=MODEL_DEVICE)
 store = FrameStore(base_dir=STORAGE_DIR)
 ttl_mgr = TTLManager(storage_path=STORAGE_DIR, max_ttl=TTL_MAX, min_ttl=TTL_MIN)
-sender = MockStreamSender()
+sender = StreamBedUDPSender()
 
 
 async def video_capture_loop():

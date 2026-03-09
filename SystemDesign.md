@@ -15,18 +15,23 @@ Model versioning is controlled through a centralized controller service, synchro
 # Design
 
 ## StreamBed Streaming Protocol
+
 ### Vishnu + Fred
 
 Our custom protocol is built atop UDP (python sockets) on the application layer, minimizing overhead on the network. The protocol adds header data on model versioning, data source, timestamps, and frame interleaving rate. \
 \
 The protocol also includes a handshake system to synchronize updates to streaming.
 
+We choose the UDP approach because of the minimal overhead, extendible data/metadata, and continuous framing. Plain HTTP/REST has high per-frame overheads (hard to stream); TCP sockets introduce custom framing complexity and more overhead than UDP; WebSocket/gRPCs require extra dependencies while still using TCP; and Manual Polling on edge devices is simple but lacks scalability and loses on the real-time aspect.
+
 ## StreamBed Controller
+
 ### Ashish
 
 The streambed controller uses a distributed database system to coordinate streaming sources/destinations, as well as model versioning across edge devices and servers. The controller is designed to minimize loss of data, globally unique identifiers, and eventual consistency with model updates.
 
 ## Inference Containers
+
 ### Ivan
 
 The inference system is separated into distinct containers running on the edge device and servers. These systems automatically update from the StreamBed controller, and primarily function as a wrapper for machine learning inference. \
@@ -34,6 +39,7 @@ The inference system is separated into distinct containers running on the edge d
 Video frames are stored locally on edge even if not streamed, and can be retrieved asynchronously through an API query. This data is stored with a dynamic TTL based on remaining available disk space.
 
 # Testing Framework
+
 ### Vishnu + Fred
 
 Testing for StreamBed will extend to unit testing on the various methods themselves, as well as full network simulation testing. \

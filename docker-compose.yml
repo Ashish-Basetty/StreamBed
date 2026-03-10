@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: controller/ControllerNode/Dockerfile
+    image: ashishbasetty/streambed-controller:latest
     container_name: streambed-controller
     ports:
       - "8080:8080"
@@ -17,6 +18,7 @@ services:
     build:
       context: .
       dockerfile: edge/Dockerfile
+    image: ashishbasetty/streambed-edge:latest
     container_name: streambed-edge
     ports:
       - "8000:8000"
@@ -41,6 +43,7 @@ services:
     build:
       context: .
       dockerfile: server/Dockerfile
+    image: ashishbasetty/streambed-server:latest
     container_name: streambed-server
     ports:
       - "8001:8001"

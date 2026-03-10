@@ -6,3 +6,14 @@ deployment_testing/controller-data/
 deployment_testing/daemon-data/
 deployment_testing/daemon-edge-data/
 deployment_testing/daemon-server-data/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# pytest cache
+.pytest_cache/
+
+# virtual environments
+venv/
+.env

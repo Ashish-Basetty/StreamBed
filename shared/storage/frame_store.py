@@ -53,14 +53,15 @@ class FrameStore:
         self,
         frame_id: str,
         timestamp: float,
-        frame: np.ndarray,
+        frame: Optional[np.ndarray],
         embedding: Optional[np.ndarray],
         model_version: str,
         ttl_seconds: float,
     ) -> StoredFrame:
-        """Save a frame and optional embedding to disk + metadata to SQLite."""
-        frame_path = str(self._frames_dir / f"{frame_id}.jpg")
-        cv2.imwrite(frame_path, frame)
+        frame_path = ""
+        if frame is not None:
+            frame_path = str(self._frames_dir / f"{frame_id}.jpg")
+            cv2.imwrite(frame_path, frame)
 
         emb_path = None
         if embedding is not None:

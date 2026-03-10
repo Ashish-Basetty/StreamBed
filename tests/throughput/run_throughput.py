@@ -78,12 +78,17 @@ def wait_healthy(timeout=120):
 
 def wait_flowing(timeout=180):
     deadline = time.time() + timeout
+    consecutive = 0
     last = get_frame_count()
     while time.time() < deadline:
         time.sleep(5)
         current = get_frame_count()
         if current > last:
-            return True
+            consecutive += 1
+            if consecutive >= 3:
+                return True
+        else:
+            consecutive = 0
         last = current
     return False
 

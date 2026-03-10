@@ -1,0 +1,52 @@
+services:
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - FORWARD_HOST=server
+      - FORWARD_PORT=9000
+      - DELAY_MS=${DELAY_MS:-0}
+      - LOSS_PCT=${LOSS_PCT:-0}
+    networks:
+      - streambed-throughput
+
+  edge:
+    build:
+      context: ../..
+      dockerfile: edge/Dockerfile
+    environment:
+      - DEVICE_ID=edge-001
+      - DEVICE_CLUSTER=default
+      - CONTROLLER_URL=
+      - STORAGE_DIR=/data/streambed
+      - VIDEO_SOURCE=/data/test_video.mp4
+      - SERVER_HOST=proxy
+      - SERVER_PORT=9001
+      - MODEL_DEVICE=cpu
+    volumes:
+      - ./test_video.mp4:/data/test_video.mp4
+    depends_on:
+      - proxy
+    networks:
+      - streambed-throughput
+
+  server:
+    build:
+      context: ../..
+      dockerfile: server/Dockerfile
+    environment:
+      - DEVICE_ID=server-001
+      - DEVICE_CLUSTER=default
+      - CONTROLLER_URL=
+      - STORAGE_DIR=/data/streambed
+      - MODEL_DEVICE=cpu
+      - STREAM_LISTEN_PORT=9000
+    ports:
+      - "8001:8001"
+    networks:
+      - streambed-throughput
+
+networks:
+  streambed-throughput:
+    driver: bridge

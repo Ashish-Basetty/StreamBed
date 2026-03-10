@@ -38,7 +38,15 @@ receiver = StreamBedUDPReceiver()
 async def stream_receive_loop():
     """Receive frames from edge devices and run server-side inference."""
     await receiver.listen(STREAM_LISTEN_HOST, STREAM_LISTEN_PORT)
+    frame_count = 0
     async for stream_frame in receiver.receive_stream():
+        frame_count += 1
+        src = stream_frame.source_device_id
+        has_frame = stream_frame.frame is not None
+        has_emb = stream_frame.embedding is not None
+        print(f"[Server] Received #{frame_count} from {src} "
+              f"(frame={has_frame}, embedding={has_emb}, "
+              f"ts={stream_frame.timestamp:.3f})")
         if stream_frame.frame is not None:
             result = model.process_frame(stream_frame.frame)
             frame_id = f"{DEVICE_ID}_{uuid.uuid4().hex[:12]}"
@@ -47,6 +55,9 @@ async def stream_receive_loop():
                 frame_id, stream_frame.timestamp, stream_frame.frame,
                 result.embedding, model.get_model_version(), ttl,
             )
+            print(f"[Server] Stored {frame_id} | label={result.label} "
+                  f"conf={result.confidence:.3f} | "
+                  f"stored_total={store.count()}")
 
 
 async def ttl_cleanup_loop():

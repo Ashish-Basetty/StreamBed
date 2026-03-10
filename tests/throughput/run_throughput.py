@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import os
 import subprocess
@@ -105,8 +106,8 @@ def wait_healthy(timeout=120):
     return False
 
 
-async def _send(data, mode):
-    sender = StreamBedUDPSender()
+async def _send(data, mode, chunk_delay, use_jpeg):
+    sender = StreamBedUDPSender(chunk_delay=chunk_delay, use_jpeg=use_jpeg)
     await sender.connect(PROXY_HOST, PROXY_PORT)
     await asyncio.sleep(0.1)
     for frame, embedding in data:
@@ -119,7 +120,6 @@ async def _send(data, mode):
             frame_interleaving_rate=30.0,
         )
         await sender.send(sf)
-        await asyncio.sleep(0)
     await sender.close()
 
 
@@ -140,11 +140,11 @@ def wait_stable(timeout=90):
     return get_frame_count()
 
 
-def measure(data, mode):
+def measure(data, mode, chunk_delay, use_jpeg):
     n_sent = len(data)
     count_before = get_frame_count()
     t_start = time.time()
-    asyncio.run(_send(data, mode))
+    asyncio.run(_send(data, mode, chunk_delay, use_jpeg))
     t_sent = time.time()
     count_after = wait_stable()
     t_end = time.time()
@@ -157,6 +157,14 @@ def measure(data, mode):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--jpeg", action="store_true")
+    parser.add_argument("--throttle", action="store_true")
+    args = parser.parse_args()
+
+    chunk_delay = 0.001 if args.throttle else 0.0
+    use_jpeg = args.jpeg
+
     generate_video()
     data = precompute(N_FRAMES)
 
@@ -172,8 +180,9 @@ def main():
         compose_down()
         return
 
+    opts = " | ".join(filter(None, ["jpeg" if use_jpeg else None, "throttle" if args.throttle else None])) or "none"
     print(f"\n{'='*67}")
-    print(f"  StreamBed Throughput Benchmark  ({N_FRAMES} frames per run)")
+    print(f"  StreamBed Throughput Benchmark  ({N_FRAMES} frames | opts: {opts})")
     print(f"{'='*67}")
     print(f"  {'Mode':<14} {'Condition':<14} {'FPS':>7} {'Delivery':>10} {'Latency':>10}")
     print(f"  {'-'*59}")
@@ -184,7 +193,7 @@ def main():
             env = {k: v for k, v in cond.items() if k != "label"}
             restart_proxy(env)
             time.sleep(5)
-            fps, delivery, latency_ms = measure(data, mode)
+            fps, delivery, latency_ms = measure(data, mode, chunk_delay, use_jpeg)
             print(f"  {mode:<14} {label:<14} {fps:>7.1f} {delivery:>9.1%} {latency_ms:>8.0f}ms")
 
     print(f"{'='*67}\n")

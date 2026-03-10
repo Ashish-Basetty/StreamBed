@@ -10,11 +10,13 @@ import io
 import math
 import os
 
+import cv2
 import numpy as np
 
 
 CHUNK_MAGIC = b'CHNK'
 CHUNK_SIZE = 8000
+JPEG_MAGIC = b'JPEG'
 
 
 @dataclass
@@ -27,15 +29,19 @@ class StreamFrame:
     frame_interleaving_rate: Optional[float] = None
 
 
-def serialize_stream_frame(frame: StreamFrame) -> bytes:
+def serialize_stream_frame(frame: StreamFrame, use_jpeg: bool = False) -> bytes:
     model_ver_bytes = frame.model_version.encode('utf-8')
     source_id_bytes = frame.source_device_id.encode('utf-8')
 
     frame_bytes = b''
     if frame.frame is not None:
-        buf = io.BytesIO()
-        np.save(buf, frame.frame)
-        frame_bytes = buf.getvalue()
+        if use_jpeg:
+            ok, buf = cv2.imencode('.jpg', frame.frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            frame_bytes = JPEG_MAGIC + buf.tobytes() if ok else b''
+        else:
+            buf = io.BytesIO()
+            np.save(buf, frame.frame)
+            frame_bytes = buf.getvalue()
 
     embedding_bytes = b''
     if frame.embedding is not None:
@@ -77,8 +83,12 @@ def deserialize_stream_frame(data: bytes) -> StreamFrame:
 
     frame = None
     if frame_bytes:
-        buf = io.BytesIO(frame_bytes)
-        frame = np.load(buf)
+        if frame_bytes[:4] == JPEG_MAGIC:
+            arr = np.frombuffer(frame_bytes[4:], dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        else:
+            buf = io.BytesIO(frame_bytes)
+            frame = np.load(buf)
 
     embedding = None
     if embedding_bytes:
@@ -155,10 +165,12 @@ class StreamBedUDPProtocol(asyncio.DatagramProtocol):
 
 
 class StreamBedUDPSender(StreamSenderInterface):
-    def __init__(self):
+    def __init__(self, chunk_delay: float = 0.0, use_jpeg: bool = False):
         self._transport = None
         self._protocol = None
         self._server_addr = None
+        self._chunk_delay = chunk_delay
+        self._use_jpeg = use_jpeg
 
     async def connect(self, server_host: str, server_port: int) -> None:
         loop = asyncio.get_running_loop()
@@ -175,11 +187,11 @@ class StreamBedUDPSender(StreamSenderInterface):
         if not self._transport or not self._server_addr:
             raise RuntimeError("sender is not connected")
         try:
-            payload = serialize_stream_frame(frame)
+            payload = serialize_stream_frame(frame, self._use_jpeg)
             stream_id = os.urandom(16)
             for chunk in _make_chunks(stream_id, payload):
                 self._transport.sendto(chunk)
-                await asyncio.sleep(0.001)
+                await asyncio.sleep(self._chunk_delay)
             return True
         except Exception as e:
             print(f"[UDPSender] failed to send frame: {e}")

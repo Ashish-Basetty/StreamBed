@@ -10,11 +10,13 @@ import io
 import math
 import os
 
+import cv2
 import numpy as np
 
 
 CHUNK_MAGIC = b'CHNK'
 CHUNK_SIZE = 8000
+JPEG_MAGIC = b'JPEG'
 
 
 @dataclass
@@ -33,9 +35,13 @@ def serialize_stream_frame(frame: StreamFrame) -> bytes:
 
     frame_bytes = b''
     if frame.frame is not None:
-        buf = io.BytesIO()
-        np.save(buf, frame.frame)
-        frame_bytes = buf.getvalue()
+        ok, buf = cv2.imencode('.jpg', frame.frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if ok:
+            frame_bytes = JPEG_MAGIC + buf.tobytes()
+        else:
+            tmp = io.BytesIO()
+            np.save(tmp, frame.frame)
+            frame_bytes = tmp.getvalue()
 
     embedding_bytes = b''
     if frame.embedding is not None:
@@ -77,8 +83,12 @@ def deserialize_stream_frame(data: bytes) -> StreamFrame:
 
     frame = None
     if frame_bytes:
-        buf = io.BytesIO(frame_bytes)
-        frame = np.load(buf)
+        if frame_bytes[:4] == JPEG_MAGIC:
+            arr = np.frombuffer(frame_bytes[4:], dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        else:
+            buf = io.BytesIO(frame_bytes)
+            frame = np.load(buf)
 
     embedding = None
     if embedding_bytes:
@@ -179,7 +189,7 @@ class StreamBedUDPSender(StreamSenderInterface):
             stream_id = os.urandom(16)
             for chunk in _make_chunks(stream_id, payload):
                 self._transport.sendto(chunk)
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.001)
             return True
         except Exception as e:
             print(f"[UDPSender] failed to send frame: {e}")

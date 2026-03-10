@@ -8,26 +8,8 @@ services:
       - FORWARD_PORT=9000
       - DELAY_MS=${DELAY_MS:-0}
       - LOSS_PCT=${LOSS_PCT:-0}
-    networks:
-      - streambed-throughput
-
-  edge:
-    build:
-      context: ../..
-      dockerfile: edge/Dockerfile
-    environment:
-      - DEVICE_ID=edge-001
-      - DEVICE_CLUSTER=default
-      - CONTROLLER_URL=
-      - STORAGE_DIR=/data/streambed
-      - VIDEO_SOURCE=/data/test_video.mp4
-      - SERVER_HOST=proxy
-      - SERVER_PORT=9001
-      - MODEL_DEVICE=cpu
-    volumes:
-      - ./test_video.mp4:/data/test_video.mp4
-    depends_on:
-      - proxy
+    ports:
+      - "9001:9001/udp"
     networks:
       - streambed-throughput
 
@@ -44,9 +26,14 @@ services:
       - STREAM_LISTEN_PORT=9000
     ports:
       - "8001:8001"
+    volumes:
+      - server-model-cache:/root/.cache/torch
     networks:
       - streambed-throughput
 
 networks:
   streambed-throughput:
     driver: bridge
+
+volumes:
+  server-model-cache:

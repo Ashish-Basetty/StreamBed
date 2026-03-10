@@ -168,7 +168,7 @@ class StreamBedUDPSender(StreamSenderInterface):
             remote_addr=self._server_addr,
         )
         handshake = json.dumps({"type": "handshake", "source": "sender"}).encode("utf-8")
-        self._transport.sendto(handshake, self._server_addr)
+        self._transport.sendto(handshake)
         print(f"[UDPSender] handshake sent to {self._server_addr}")
 
     async def send(self, frame: StreamFrame) -> bool:
@@ -178,7 +178,7 @@ class StreamBedUDPSender(StreamSenderInterface):
             payload = serialize_stream_frame(frame)
             stream_id = os.urandom(16)
             for chunk in _make_chunks(stream_id, payload):
-                self._transport.sendto(chunk, self._server_addr)
+                self._transport.sendto(chunk)
                 await asyncio.sleep(0)
             return True
         except Exception as e:

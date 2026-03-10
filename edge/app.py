@@ -74,7 +74,13 @@ async def video_capture_loop():
                 source_device_id=DEVICE_ID,
                 frame_interleaving_rate=30.0,
             )
-            await sender.send(sf)
+            sent = await sender.send(sf)
+
+            frame_count = store.count()
+            if frame_count % 10 == 1 or frame_count <= 5:
+                print(f"[Edge] Frame {frame_count} | {frame_id} | "
+                      f"label={result.label} conf={result.confidence:.3f} | "
+                      f"ttl={ttl:.0f}s | sent={sent}")
 
             # ~30 fps cap
             await asyncio.sleep(0.033)

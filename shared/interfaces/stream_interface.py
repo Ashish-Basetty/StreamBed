@@ -15,6 +15,7 @@ import numpy as np
 
 
 CHUNK_MAGIC = b'CHNK'
+# todo: change to <1400 to avoid IP-level fragmentation, but need to handle more chunks per frame
 CHUNK_SIZE = 8000
 JPEG_MAGIC = b'JPEG'
 

@@ -122,13 +122,57 @@ async def _send(data, mode, chunk_delay, use_jpeg):
         await sender.send(sf)
     await sender.close()
 
+# batch + queue ver for scalability (but adds overhead for small N)
+# async def _send(data, mode, chunk_delay, use_jpeg, batch_size=8):
+#     sender = StreamBedUDPSender(chunk_delay=chunk_delay, use_jpeg=use_jpeg)
+#     await sender.connect(PROXY_HOST, PROXY_PORT)
+#     await asyncio.sleep(0.1)
+
+#     queue = asyncio.Queue(maxsize=256)
+
+#     async def producer():
+#         for frame, embedding in data:
+#             sf = StreamFrame(
+#                 timestamp=time.time(),
+#                 frame=frame if mode == "raw_frames" else None,
+#                 embedding=embedding if mode == "embeddings" else None,
+#                 model_version="MobileNetV2-v1.0",
+#                 source_device_id="benchmark-sender",
+#                 frame_interleaving_rate=30.0,
+#             )
+#             await queue.put(sf)
+#         # Sentinel to indicate end
+#         await queue.put(None)
+
+#     async def consumer():
+#         while True:
+#             batch = []
+#             while len(batch) < batch_size:
+#                 sf = await queue.get()
+#                 if sf is None:
+#                     # Put sentinel back for next consumer iteration (or exit)
+#                     await queue.put(None)
+#                     break
+#                 batch.append(sf)
+#                 queue.task_done()
+#             if batch:
+#                 # send the batch
+#                 for sf in batch:
+#                     await sender.send(sf)
+#             else:
+#                 # batch is empty → sentinel received → exit loop
+#                 break
+
+#     await asyncio.gather(producer(), consumer())
+#     await sender.close()
+
 
 def wait_stable(timeout=90):
     deadline = time.time() + timeout
     prev = get_frame_count()
     stable = 0
     while time.time() < deadline:
-        time.sleep(1)
+        time.sleep(0.1)
         curr = get_frame_count()
         if curr == prev:
             stable += 1
@@ -144,15 +188,17 @@ def measure(data, mode, chunk_delay, use_jpeg):
     n_sent = len(data)
     count_before = get_frame_count()
     t_start = time.time()
+    # include embedding computation time for "embeddings" but not "raw_frames" (e2e latency)
+    if mode == "embeddings":
+        data = precompute(N_FRAMES)
     asyncio.run(_send(data, mode, chunk_delay, use_jpeg))
-    t_sent = time.time()
     count_after = wait_stable()
     t_end = time.time()
     received = count_after - count_before
     elapsed = t_end - t_start
     fps = received / elapsed if elapsed > 0 else 0
     delivery = received / n_sent if n_sent > 0 else 0
-    latency_ms = (t_end - t_sent) / max(received, 1) * 1000
+    latency_ms = (t_end - t_start) / max(received, 1) * 1000
     return fps, delivery, latency_ms
 
 

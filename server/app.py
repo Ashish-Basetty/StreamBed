@@ -1,6 +1,8 @@
 import asyncio
+import json
 import sys
 import uuid
+from pathlib import Path
 
 import httpx
 import uvicorn
@@ -93,6 +95,29 @@ async def heartbeat_loop():
         await asyncio.sleep(30)
 
 
+async def stream_target_poll_loop():
+    """Poll the stream target config file from the daemon for informational purposes."""
+    stream_target_path = Path("/config/stream-target.json")
+    last_target = None
+    
+    while True:
+        try:
+            if stream_target_path.exists():
+                data = json.loads(stream_target_path.read_text())
+                target_ip = data.get("target_ip")
+                target_port = data.get("target_port")
+                
+                current_target = (target_ip, target_port) if target_ip and target_port else None
+                
+                if current_target and current_target != last_target:
+                    print(f"[Server] Stream target config changed to {target_ip}:{target_port}")
+                    last_target = current_target
+        except Exception as e:
+            print(f"[Server] stream_target_poll_loop error: {e}")
+        
+        await asyncio.sleep(30)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("[Server] Loading model...")
@@ -102,12 +127,14 @@ async def lifespan(app: FastAPI):
     receive_task = asyncio.create_task(stream_receive_loop())
     cleanup_task = asyncio.create_task(ttl_cleanup_loop())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
+    stream_target_task = asyncio.create_task(stream_target_poll_loop())
 
     yield
 
     receive_task.cancel()
     cleanup_task.cancel()
     heartbeat_task.cancel()
+    stream_target_task.cancel()
     await receiver.stop()
 
 

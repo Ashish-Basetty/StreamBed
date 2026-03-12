@@ -185,7 +185,8 @@ def list_status(device_cluster: str | None = None) -> dict:
 
 @app.post("/failover")
 async def trigger_failover(device_cluster: str) -> dict:
-    """Manually trigger failover check for a cluster. Useful for testing."""
+    """Manually trigger failover check for a cluster. Useful for testing.
+    Note: failover is automatically triggered by the health monitor when unresponsive devices are detected."""
     if not device_cluster.strip():
         raise HTTPException(status_code=400, detail="device_cluster is required")
     

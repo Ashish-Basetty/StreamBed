@@ -1,6 +1,7 @@
 """StreamBed controller node - SQLite-backed API server."""
 from contextlib import asynccontextmanager
 
+import logging
 import os
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -8,13 +9,42 @@ from pydantic import BaseModel
 
 from db import get_connection, init_db, register_device, update_heartbeat
 from deploy import DeployError, DeviceNotFoundError, deploy_to_device, delete_container_from_device
+from health_monitor import create_and_start_monitor, HealthMonitor
 from shared.interfaces.heartbeat_spec import HeartbeatStatus
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Health monitor instance (started in lifespan)
+health_monitor: HealthMonitor | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global health_monitor
+    
     init_db()
+    
+    # Start health monitoring
+    heartbeat_timeout = int(os.environ.get("HEARTBEAT_TIMEOUT_SECS", "30"))
+    check_interval = int(os.environ.get("HEALTH_CHECK_INTERVAL_SECS", "5"))
+    health_monitor = await create_and_start_monitor(
+        heartbeat_timeout_secs=heartbeat_timeout,
+        check_interval_secs=check_interval,
+    )
+    logger.info(
+        f"Health monitor started (timeout={heartbeat_timeout}s, interval={check_interval}s)"
+    )
+    
     yield
+    
+    # Stop health monitoring on shutdown
+    if health_monitor:
+        await health_monitor.stop()
 
 
 app = FastAPI(title="StreamBed Controller Node", lifespan=lifespan)
@@ -153,5 +183,23 @@ def list_status(device_cluster: str | None = None) -> dict:
         conn.close()
 
 
+@app.post("/failover")
+async def trigger_failover(device_cluster: str) -> dict:
+    """Manually trigger failover check for a cluster. Useful for testing."""
+    if not device_cluster.strip():
+        raise HTTPException(status_code=400, detail="device_cluster is required")
+    
+    if not health_monitor:
+        raise HTTPException(status_code=500, detail="Health monitor not initialized")
+    
+    try:
+        await health_monitor._handle_cluster_failover(device_cluster)
+        return {"ok": True, "message": f"Failover check triggered for {device_cluster}"}
+    except Exception as e:
+        logger.error(f"Error triggering failover: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)
+

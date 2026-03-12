@@ -1,7 +1,10 @@
 """SQLite database setup and access for the controller node."""
+import os
 import sqlite3
 from pathlib import Path
+import sys
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from shared.interfaces.heartbeat_spec import HeartbeatStatus
 
 DB_PATH = Path(__file__).parent / "data" / "controller.db"
@@ -158,3 +161,46 @@ def update_heartbeat(
         conn.commit()
     finally:
         conn.close()
+
+
+def get_device_status(
+    device_cluster: str,
+    device_id: str,
+) -> dict | None:
+    """Get the status record for a device. Returns None if no status exists."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT device_cluster, device_id, current_model, status, last_heartbeat
+               FROM device_status WHERE device_cluster = ? AND device_id = ?""",
+            (device_cluster, device_id),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_all_devices_in_cluster(
+    device_cluster: str,
+) -> list[dict]:
+    """Get all devices registered in a cluster."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT device_cluster, device_id, ip, port, registered_at
+               FROM devices WHERE device_cluster = ?""",
+            (device_cluster,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def update_device_status(
+    device_cluster: str,
+    device_id: str,
+    current_model: str | None = None,
+    status: HeartbeatStatus | str | None = None,
+) -> None:
+    """Convenience wrapper to update device status (same as update_heartbeat)."""
+    update_heartbeat(device_cluster, device_id, current_model, status)

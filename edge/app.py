@@ -1,9 +1,7 @@
 import asyncio
-import json
 import sys
 import time
 import uuid
-from pathlib import Path
 
 import cv2
 import httpx
@@ -121,27 +119,38 @@ async def heartbeat_loop():
         await asyncio.sleep(30)
 
 
-async def stream_target_poll_loop():
-    """Poll the stream target config file from the daemon and reconnect sender if needed."""
-    stream_target_path = Path("/config/stream-target.json")
-    last_target = None
-    
+async def config_poll_loop():
+    """Periodically ask the controller what we should be running."""
     while True:
-        try:
-            if stream_target_path.exists():
-                data = json.loads(stream_target_path.read_text())
-                target_ip = data.get("target_ip")
-                target_port = data.get("target_port")
-                
-                current_target = (target_ip, target_port) if target_ip and target_port else None
-                
-                if current_target and current_target != last_target:
-                    print(f"[Edge] Stream target changed to {target_ip}:{target_port}, reconnecting...")
-                    await sender.connect(target_ip, target_port)
-                    last_target = current_target
-        except Exception as e:
-            print(f"[Edge] stream_target_poll_loop error: {e}")
-        
+        if CONTROLLER_URL and CONTROLLER_URL.strip():
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.get(
+                        f"{CONTROLLER_URL.rstrip('/')}/config",
+                        params={
+                            "device_cluster": DEVICE_CLUSTER,
+                            "device_id": DEVICE_ID,
+                        },
+                    )
+                    if resp.status_code == 200:
+                        cfg = resp.json()
+                        # example fields – adjust to whatever your controller returns
+                        model_img = cfg.get("model_image")
+                        target = cfg.get("stream_target") or {}
+                        ip = target.get("ip")
+                        port = target.get("port")
+
+                        # 1. if the controller has asked for a new container/model,
+                        #    trigger the deployment daemon (or directly pull & restart).
+                        # 2. if the stream target changed, update sender/receiver.
+                        #    (the sender/receiver already have a `connect`/`listen`
+                        #    method you can call again here).
+                        #
+                        # The code below is a stub; replace with real logic.
+                        if ip and port:
+                            await sender.connect(ip, port)   # edge only
+            except Exception as e:
+                print(f"[Edge] config poll failed: {e}")
         await asyncio.sleep(POLL_INTERVAL)
 
 
@@ -156,14 +165,14 @@ async def lifespan(app: FastAPI):
     capture_task = asyncio.create_task(video_capture_loop())
     cleanup_task = asyncio.create_task(ttl_cleanup_loop())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
-    stream_target_task = asyncio.create_task(stream_target_poll_loop())
+    config_task  = asyncio.create_task(config_poll_loop())
 
     yield
 
     capture_task.cancel()
     cleanup_task.cancel()
     heartbeat_task.cancel()
-    stream_target_task.cancel()
+    config_task.cancel()
     await sender.close()
 
 

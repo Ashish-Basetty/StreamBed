@@ -20,9 +20,11 @@ import httpx
 from db import (
     get_connection,
     get_device_address,
+    get_device_status,
     get_last_deployment,
+    set_device_status_evaluated,
 )
-from deploy import deploy_to_device, DeployError
+from deploy import delete_container_from_device, deploy_to_device, DeployError
 from shared.interfaces.heartbeat_spec import HeartbeatStatus
 
 
@@ -47,13 +49,14 @@ class HealthMonitor:
         # Startup grace period
         self.start_time = datetime.utcnow()
         self.startup_grace = timedelta(seconds=20)
+        self._initial_stream_target_synced = False
 
         # Track previous device states
         self.prev_device_states: Dict[str, str] = {}
 
         # Restart protection
         self.edge_restart_backoff: Dict[str, datetime] = {}
-        self.restart_cooldown = timedelta(seconds=30)
+        self.restart_cooldown = timedelta(seconds=5)
 
         # Reusable HTTP client
         self.client = httpx.AsyncClient(timeout=10)
@@ -84,6 +87,11 @@ class HealthMonitor:
                 await asyncio.sleep(self.check_interval)
                 continue
 
+            # Sync initial stream-target from routing table (once) so edges have a target on deploy
+            if not self._initial_stream_target_synced:
+                await self._sync_stream_targets_from_routing()
+                self._initial_stream_target_synced = True
+
             logger.info("[DEBUG] Getting clusters for health check")
             clusters = self._get_clusters()
             logger.info(f"[DEBUG] Clusters found: {clusters}")
@@ -92,33 +100,9 @@ class HealthMonitor:
                 logger.info(f"[DEBUG] Evaluating cluster: {cluster}")
                 states = await self._evaluate_cluster(cluster)
                 logger.info(f"[DEBUG] {cluster} states: {states}")
-                # await self._log_edge_server_connections(cluster)
                 await self._process_state_transitions(cluster, states)
                 self.prev_device_states.update(states)
             await asyncio.sleep(self.check_interval)
-            
-    # TODO: need to init routing table
-    # async def _log_edge_server_connections(self, cluster: str):
-    #     """Log which server each edge is currently routed to (for debugging)."""
-    #     conn = get_connection()
-    #     try:
-    #         rows = conn.execute(
-    #             """
-    #             SELECT device_id, target_server
-    #             FROM routing
-    #             WHERE device_cluster=?
-    #             """,
-    #             (cluster,)
-    #         ).fetchall()
-    #         if not rows:
-    #             logger.info(f"[DEBUG] No edge-server routing info for cluster {cluster}")
-    #             return
-    #         for device_id, target_server in rows:
-    #             logger.info(f"[DEBUG] {cluster}: {device_id} routed to {target_server}")
-    #     except Exception as e:
-    #         logger.error(f"[DEBUG] Error logging edge-server connections: {e}")
-    #     finally:
-    #         conn.close()
 
     def _get_clusters(self):
         """Return list of clusters based on device_status table (more robust)."""
@@ -131,6 +115,47 @@ class HealthMonitor:
         conn.close()
 
         return [r[0] for r in rows]
+
+    def _restart_delay_for_retry(self, retry_count: int) -> timedelta:
+        """Required delay before next restart attempt, as a function of retry_count (exponential backoff)."""
+        base_secs = self.restart_cooldown.total_seconds()
+        delay_secs = min(base_secs * (2 ** retry_count), 600)  # cap at 10 min
+        return timedelta(seconds=delay_secs)
+
+    def _attempt_restart(self, cluster: str, device_id: str) -> bool:
+        """Attempt to restart a device via delete + deploy. Returns True on success. Uses increasing delay by retry_count."""
+        key = f"{cluster}/{device_id}"
+        now = datetime.utcnow()
+        status = get_device_status(cluster, device_id)
+        retry_count = (status or {}).get("retry_count", 0)
+        required_delay = self._restart_delay_for_retry(retry_count)
+        if key in self.edge_restart_backoff and now - self.edge_restart_backoff[key] < required_delay:
+            return False
+        self.edge_restart_backoff[key] = now
+        try:
+            delete_container_from_device(cluster, device_id)
+        except DeployError as e:
+            logger.warning(f"Restart {cluster}/{device_id}: delete failed: {e}")
+            return False
+
+        last = get_last_deployment(cluster, device_id)
+        if not last:
+            logger.warning(f"Restart {cluster}/{device_id}: no deployment record, cannot redeploy")
+            return False
+
+        try:
+            deploy_to_device(
+                cluster,
+                device_id,
+                last["image"],
+                last.get("host_port"),
+                last.get("container_port"),
+            )
+            logger.info(f"Restart {cluster}/{device_id}: succeeded")
+            return True
+        except DeployError as e:
+            logger.warning(f"Restart {cluster}/{device_id}: deploy failed: {e}")
+            return False
 
     async def _evaluate_cluster(self, cluster: str):
         """Evaluate current health state of all devices."""
@@ -156,18 +181,22 @@ class HealthMonitor:
 
             if not last_heartbeat:
                 states[device_id] = "UNKNOWN"
+                set_device_status_evaluated(cluster, device_id, HeartbeatStatus.UNKNOWN)
+                asyncio.create_task(asyncio.to_thread(self._attempt_restart, cluster, device_id))
                 continue
 
             try:
                 last = datetime.fromisoformat(last_heartbeat)
+                if now - last > self.heartbeat_timeout:
+                    raise ValueError("heartbeat timeout")
             except Exception:
                 states[device_id] = "UNRESPONSIVE"
+                set_device_status_evaluated(cluster, device_id, HeartbeatStatus.UNRESPONSIVE, increment=True)
+                asyncio.create_task(asyncio.to_thread(self._attempt_restart, cluster, device_id))
                 continue
 
-            if now - last > self.heartbeat_timeout:
-                states[device_id] = "UNRESPONSIVE"
-            else:
-                states[device_id] = "ACTIVE"
+            states[device_id] = "ACTIVE"
+            set_device_status_evaluated(cluster, device_id, HeartbeatStatus.ACTIVE)
 
         return states
 
@@ -202,16 +231,33 @@ class HealthMonitor:
                         f"{cluster}: server failure but no healthy servers available"
                     )
 
+    async def _sync_stream_targets_from_routing(self) -> None:
+        """Push routing table to edge daemons' stream-target. Runs once after startup grace."""
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                """
+                SELECT source_cluster, source_device, target_device
+                FROM routing
+                """
+            ).fetchall()
+            for row in rows:
+                cluster, edge_id, target_server = row["source_cluster"], row["source_device"], row["target_device"]
+                await self._update_edge_target(cluster, edge_id, target_server, 9000)
+            if rows:
+                logger.info(f"Synced stream-target for {len(rows)} edge(s) from routing table")
+        except Exception as e:
+            logger.error(f"Failed to sync stream-target from routing: {e}")
+        finally:
+            conn.close()
+
     async def _reroute_edges(self, cluster: str, edges, target_server: str):
-        """Reroute edges to a healthy server."""
-
-        addr = get_device_address(cluster, target_server)
-
-        if not addr:
-            logger.error(f"{cluster}/{target_server}: address unknown")
-            return
-
-        target_ip, target_port = addr
+        """Reroute edges to a healthy server.
+        Uses target_server (device_id, e.g. server-001) as hostname and port 9000
+        (stream listen port). Server containers get a network alias = device_id at deploy.
+        """
+        target_ip = target_server
+        target_port = 9000  # STREAM_LISTEN_PORT on server
 
         for edge in edges:
             await self._update_edge_target(cluster, edge, target_ip, target_port)

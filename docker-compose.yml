@@ -1,3 +1,7 @@
+# StreamBed: controller + deployment daemons per device.
+# Daemons register with the controller; a launch script deploys edge/server containers.
+# Run from project root. Create daemon-data dirs first: mkdir -p daemon-data/{edge1,edge2,edge3,server1,server2}/{streambed}
+
 version: "3.9"
 
 services:
@@ -14,130 +18,138 @@ services:
     networks:
       - streambed-net
 
-  edge1:
+  # --- Edge daemons (each manages an edge container) ---
+  daemon-edge1:
     build:
       context: .
-      dockerfile: edge/Dockerfile
-    image: ashishbasetty/streambed-edge:latest
-    container_name: streambed-edge1
-    restart: always
+      dockerfile: controller/DeploymentDaemon/Dockerfile
+    container_name: streambed-daemon-edge1
     ports:
-      - "8000:8000"
+      - "9090:9090"
+      - "9000:9000/udp"
     volumes:
-      - edge1-data:/data/streambed
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./daemon-data/edge1:/app/data
     environment:
+      - STREAMBED_CONFIG_HOST_PATH=${PWD}/daemon-data/edge1
+      - STREAMBED_DATA_HOST_PATH=${PWD}/daemon-data/edge1/streambed
+      - STREAMBED_HOST_PORT=8000
+      - STREAMBED_CONTAINER_PORT=8000
+      - STREAMBED_MEMORY_LIMIT=6g
+      - CONTROLLER_URL=http://controller:8080
       - DEVICE_ID=edge-001
       - DEVICE_CLUSTER=default
-      - CONTROLLER_URL=http://controller:8080
-      - STORAGE_DIR=/data/streambed
+      - DAEMON_ADDRESS=daemon-edge1
       - VIDEO_SOURCE=0
-      - SERVER_HOST=server1
-      - SERVER_PORT=9000
-      - MODEL_DEVICE=cpu
     depends_on:
       - controller
-      - server1
     networks:
       - streambed-net
 
-  edge2:
+  daemon-edge2:
     build:
       context: .
-      dockerfile: edge/Dockerfile
-    image: ashishbasetty/streambed-edge:latest
-    container_name: streambed-edge2
-    restart: always
+      dockerfile: controller/DeploymentDaemon/Dockerfile
+    container_name: streambed-daemon-edge2
     ports:
-      - "8002:8000"
+      - "9091:9090"
+      - "9001:9000/udp"
     volumes:
-      - edge2-data:/data/streambed
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./daemon-data/edge2:/app/data
     environment:
+      - STREAMBED_CONFIG_HOST_PATH=${PWD}/daemon-data/edge2
+      - STREAMBED_DATA_HOST_PATH=${PWD}/daemon-data/edge2/streambed
+      - STREAMBED_HOST_PORT=8002
+      - STREAMBED_CONTAINER_PORT=8000
+      - STREAMBED_MEMORY_LIMIT=6g
+      - CONTROLLER_URL=http://controller:8080
       - DEVICE_ID=edge-002
       - DEVICE_CLUSTER=default
-      - CONTROLLER_URL=http://controller:8080
-      - STORAGE_DIR=/data/streambed
+      - DAEMON_ADDRESS=daemon-edge2
       - VIDEO_SOURCE=0
-      - SERVER_HOST=server2
-      - SERVER_PORT=9000
-      - MODEL_DEVICE=cpu
     depends_on:
       - controller
-      - server2
     networks:
       - streambed-net
 
-  edge3:
+  daemon-edge3:
     build:
       context: .
-      dockerfile: edge/Dockerfile
-    image: ashishbasetty/streambed-edge:latest
-    container_name: streambed-edge3
-    restart: always
+      dockerfile: controller/DeploymentDaemon/Dockerfile
+    container_name: streambed-daemon-edge3
     ports:
-      - "8003:8000"
+      - "9092:9090"
+      - "9002:9000/udp"
     volumes:
-      - edge3-data:/data/streambed
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./daemon-data/edge3:/app/data
     environment:
+      - STREAMBED_CONFIG_HOST_PATH=${PWD}/daemon-data/edge3
+      - STREAMBED_DATA_HOST_PATH=${PWD}/daemon-data/edge3/streambed
+      - STREAMBED_HOST_PORT=8003
+      - STREAMBED_CONTAINER_PORT=8000
+      - STREAMBED_MEMORY_LIMIT=6g
+      - CONTROLLER_URL=http://controller:8080
       - DEVICE_ID=edge-003
       - DEVICE_CLUSTER=default
-      - CONTROLLER_URL=http://controller:8080
-      - STORAGE_DIR=/data/streambed
+      - DAEMON_ADDRESS=daemon-edge3
       - VIDEO_SOURCE=0
-      - SERVER_HOST=server1
-      - SERVER_PORT=9000
-      - MODEL_DEVICE=cpu
     depends_on:
       - controller
-      - server1
     networks:
       - streambed-net
-  server1:
+
+  # --- Server daemons (each manages a server container) ---
+  daemon-server1:
     build:
       context: .
-      dockerfile: server/Dockerfile
-    image: ashishbasetty/streambed-server:latest
-    container_name: streambed-server1
+      dockerfile: controller/DeploymentDaemon/Dockerfile
+    container_name: streambed-daemon-server1
     ports:
-      - "8001:8001"
-      - "9000:9000"
+      - "9093:9090"
     volumes:
-      - server-data:/data/streambed
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./daemon-data/server1:/app/data
     environment:
+      - STREAMBED_CONFIG_HOST_PATH=${PWD}/daemon-data/server1
+      - STREAMBED_DATA_HOST_PATH=${PWD}/daemon-data/server1/streambed
+      - STREAMBED_HOST_PORT=8001
+      - STREAMBED_CONTAINER_PORT=8001
+      - STREAMBED_MEMORY_LIMIT=6g
+      - CONTROLLER_URL=http://controller:8080
       - DEVICE_ID=server-001
       - DEVICE_CLUSTER=default
-      - CONTROLLER_URL=http://controller:8080
-      - STORAGE_DIR=/data/streambed
-      - MODEL_DEVICE=cpu
-      - STREAM_LISTEN_PORT=9000
+      - DAEMON_ADDRESS=daemon-server1
+    depends_on:
+      - controller
     networks:
       - streambed-net
 
-  server2:
+  daemon-server2:
     build:
       context: .
-      dockerfile: server/Dockerfile
-    image: ashishbasetty/streambed-server:latest
-    container_name: streambed-server2
+      dockerfile: controller/DeploymentDaemon/Dockerfile
+    container_name: streambed-daemon-server2
     ports:
-      - "8004:8001"
-      - "9001:9000"
+      - "9094:9090"
     volumes:
-      - server-data:/data/streambed
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./daemon-data/server2:/app/data
     environment:
+      - STREAMBED_CONFIG_HOST_PATH=${PWD}/daemon-data/server2
+      - STREAMBED_DATA_HOST_PATH=${PWD}/daemon-data/server2/streambed
+      - STREAMBED_HOST_PORT=8004
+      - STREAMBED_CONTAINER_PORT=8001
+      - STREAMBED_MEMORY_LIMIT=6g
+      - CONTROLLER_URL=http://controller:8080
       - DEVICE_ID=server-002
       - DEVICE_CLUSTER=default
-      - CONTROLLER_URL=http://controller:8080
-      - STORAGE_DIR=/data/streambed
-      - MODEL_DEVICE=cpu
-      - STREAM_LISTEN_PORT=9000
+      - DAEMON_ADDRESS=daemon-server2
+    depends_on:
+      - controller
     networks:
       - streambed-net
-
-volumes:
-  edge1-data:
-  edge2-data:
-  edge3-data:
-  server-data:
 
 networks:
   streambed-net:

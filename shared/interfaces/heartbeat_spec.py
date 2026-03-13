@@ -12,3 +12,4 @@ class HeartbeatStatus(StrEnum):
     ACTIVE = "Active"
     UNRESPONSIVE = "Unresponsive"
     DEPLOYMENT_FAILURE = "Deployment Failure"
+    UNKNOWN = "Unknown"

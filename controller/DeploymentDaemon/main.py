@@ -64,6 +64,11 @@ DEVICE_CLUSTER = os.environ.get("DEVICE_CLUSTER")
 if not DEVICE_CLUSTER:
     raise ValueError("DEVICE_CLUSTER is not set")
 
+STREAM_PROXY_PORT = int(os.environ.get("STREAM_PROXY_PORT", "9000"))
+STREAM_TARGET_POLL_INTERVAL = float(os.environ.get("STREAM_TARGET_POLL_INTERVAL", "2.0"))
+# Memory limit for inference containers (edge/server) - PyTorch needs ~4–6GB
+STREAMBED_MEMORY_LIMIT = os.environ.get("STREAMBED_MEMORY_LIMIT", "6g")
+
 
 def _deployment_hash() -> str:
     """Generate a unique hash for this deployment."""
@@ -114,6 +119,56 @@ def _save_stream_target(target_ip: str, target_port: int) -> None:
         json.dumps({"target_ip": target_ip, "target_port": target_port}, indent=2)
     )
 
+
+# Mutable container for stream proxy target; updated by poll loop
+_stream_proxy_target: dict = {"ip": None, "port": None}
+_stream_proxy_transport = None
+
+
+class StreamProxyProtocol(asyncio.DatagramProtocol):
+    """UDP proxy: receives on listen port, forwards to current stream-target."""
+
+    def __init__(self):
+        self.transport = None
+
+    def connection_made(self, transport):
+        global _stream_proxy_transport
+        self.transport = transport
+        _stream_proxy_transport = transport
+
+    def datagram_received(self, data: bytes, addr):
+        target = _stream_proxy_target
+        if target["ip"] and target["port"] is not None:
+            self.transport.sendto(data, (target["ip"], target["port"]))
+
+    def error_received(self, exc):
+        pass
+
+    def connection_lost(self, exc):
+        pass
+
+
+async def _stream_proxy_target_poll_loop() -> None:
+    """Periodically reload stream-target.json and update proxy destination."""
+    while True:
+        cfg = _load_stream_target()
+        if cfg and cfg.get("target_ip") and cfg.get("target_port") is not None:
+            _stream_proxy_target["ip"] = cfg["target_ip"]
+            _stream_proxy_target["port"] = int(cfg["target_port"])
+        await asyncio.sleep(STREAM_TARGET_POLL_INTERVAL)
+
+
+async def _run_stream_proxy() -> None:
+    """Start UDP proxy on STREAM_PROXY_PORT. Only for edge daemons."""
+    loop = asyncio.get_running_loop()
+    transport, _ = await loop.create_datagram_endpoint(
+        lambda: StreamProxyProtocol(),
+        local_addr=("0.0.0.0", STREAM_PROXY_PORT),
+    )
+    print(f"[Daemon] Stream proxy listening on 0.0.0.0:{STREAM_PROXY_PORT} (target from stream-target.json)")
+    await asyncio.Future()  # run forever
+
+
 _REGISTER_RETRIES = 5
 _REGISTER_RETRY_DELAY = 2.0
 
@@ -163,8 +218,28 @@ async def _deregister_with_retries() -> None:
 async def lifespan(app: FastAPI):
     await _register_with_retries()
 
+    poll_task = None
+    proxy_task = None
+    if DEVICE_ID.startswith("edge-"):
+        poll_task = asyncio.create_task(_stream_proxy_target_poll_loop())
+        proxy_task = asyncio.create_task(_run_stream_proxy())
+
     yield
 
+    if poll_task:
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
+    if proxy_task:
+        proxy_task.cancel()
+        try:
+            await proxy_task
+        except asyncio.CancelledError:
+            pass
+        if _stream_proxy_transport:
+            _stream_proxy_transport.close()
     await _deregister_with_retries()
 
 
@@ -205,24 +280,46 @@ def deploy(body: DeployRequest) -> dict:
             old_container = f"streambed-{state['container_hash']}"
             _stop_and_remove(old_container)
 
-        # 3. Run new container with port mapping (and config volume if host path provided)
+        # 3. Run new container with port mapping, volumes, and memory limit (PyTorch needs ~1–2GB)
         run_kwargs = {
             "name": new_container,
             "detach": True,
-            "ports": {f"{container_port}/tcp": host_port}
+            "ports": {f"{container_port}/tcp": host_port},
+            "mem_limit": STREAMBED_MEMORY_LIMIT,
         }
-        data_dir = os.environ.get("STREAMBED_CONFIG_HOST_PATH")
+        volumes = {}
+        config_dir = os.environ.get("STREAMBED_CONFIG_HOST_PATH")
+        if config_dir:
+            volumes[config_dir] = {"bind": "/config", "mode": "ro"}
+        data_dir = os.environ.get("STREAMBED_DATA_HOST_PATH")
         if data_dir:
-            run_kwargs["volumes"] = {data_dir: {"bind": "/config", "mode": "ro"}}
+            volumes[data_dir] = {"bind": "/data/streambed", "mode": "rw"}
+        if volumes:
+            run_kwargs["volumes"] = volumes
 
         if network:
             run_kwargs["network"] = network
+            # Server containers get network alias = device_id so proxy can reach them at server-001:9000
+            if DEVICE_ID.startswith("server-"):
+                run_kwargs["networking_config"] = client.api.create_networking_config({
+                    network: client.api.create_endpoint_config(aliases=[DEVICE_ID])
+                })
 
-        run_kwargs["environment"] = {
+        container_env = {
             "DEVICE_ID": DEVICE_ID,
             "DEVICE_CLUSTER": DEVICE_CLUSTER,
             "CONTROLLER_URL": CONTROLLER_URL,
         }
+        video_source = os.environ.get("VIDEO_SOURCE")
+        if video_source:
+            container_env["VIDEO_SOURCE"] = video_source
+        # Edges send to daemon's stream proxy; pass host and port
+        if DEVICE_ID.startswith("edge-"):
+            proxy_host = os.environ.get("STREAM_PROXY_HOST", DAEMON_ADDRESS)
+            proxy_port = int(os.environ.get("STREAM_PROXY_PORT", "9000"))
+            container_env["STREAM_PROXY_HOST"] = proxy_host
+            container_env["STREAM_PROXY_PORT"] = str(proxy_port)
+        run_kwargs["environment"] = container_env
 
         client.containers.run(body.image, **run_kwargs)
 
@@ -270,5 +367,5 @@ def put_stream_target(body: StreamTargetRequest) -> dict:
 
 
 if __name__ == "__main__":
-    print("Deployment daemon running on port 9090")
+    print(f"Deployment daemon running on port {DAEMON_PORT}")
     uvicorn.run(app, host="0.0.0.0", port=DAEMON_PORT, log_level="warning")

@@ -31,11 +31,11 @@ async def lifespan(app: FastAPI):
 
     # Register devices at startup using Docker Compose config (edit as needed)
     DOCKER_DEVICES = [
-        {"device_cluster": "default", "device_id": "server-001", "ip": "server1", "port": 9000},
-        {"device_cluster": "default", "device_id": "server-002", "ip": "server2", "port": 9000},
-        {"device_cluster": "default", "device_id": "edge-001",   "ip": "edge1",   "port": 8000},
-        {"device_cluster": "default", "device_id": "edge-002",   "ip": "edge2",   "port": 8000},
-        {"device_cluster": "default", "device_id": "edge-003",   "ip": "edge3",   "port": 8000},
+        {"device_cluster": "default", "device_id": "server-001", "ip": "daemon-server1", "port": 9090},
+        {"device_cluster": "default", "device_id": "server-002", "ip": "daemon-server2", "port": 9090},
+        {"device_cluster": "default", "device_id": "edge-001",   "ip": "daemon-edge1",   "port": 9090},
+        {"device_cluster": "default", "device_id": "edge-002",   "ip": "daemon-edge2",   "port": 9090},
+        {"device_cluster": "default", "device_id": "edge-003",   "ip": "daemon-edge3",   "port": 9090},
     ]
     for dev in DOCKER_DEVICES:
         register_device(dev["device_cluster"], dev["device_id"], dev["ip"], dev["port"])

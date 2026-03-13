@@ -28,6 +28,7 @@ def init_db() -> None:
                 device_cluster TEXT NOT NULL,
                 device_id TEXT NOT NULL,
                 ip TEXT NOT NULL,
+                port INTEGER,
                 registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (device_cluster, device_id)
             );
@@ -39,6 +40,7 @@ def init_db() -> None:
                 current_model TEXT,
                 status TEXT,
                 last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                retry_count INTEGER DEFAULT 0,
                 PRIMARY KEY (device_cluster, device_id)
             );
 
@@ -52,13 +54,20 @@ def init_db() -> None:
                 PRIMARY KEY (source_cluster, source_device)
             );
 
+            -- Deployments: last deployment config per device (for restarts)
+            CREATE TABLE IF NOT EXISTS deployments (
+                device_cluster TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                image TEXT NOT NULL,
+                host_port INTEGER,
+                container_port INTEGER,
+                deployed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (device_cluster, device_id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_devices_cluster ON devices(device_cluster);
             CREATE INDEX IF NOT EXISTS idx_status_heartbeat ON device_status(last_heartbeat);
-        """)        # Migration: add port column if missing (daemon listen port, default 9090)
-        try:
-            conn.execute("ALTER TABLE devices ADD COLUMN port INTEGER")
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        """)
         conn.commit()
     finally:
         conn.close()
@@ -162,6 +171,29 @@ def update_heartbeat(
         conn.close()
 
 
+def set_device_status_evaluated(
+    device_cluster: str,
+    device_id: str,
+    status: str,
+    increment: bool = False,
+) -> None:
+    """Update only the status column in device_status (e.g. Active, Unresponsive). Does not touch last_heartbeat."""
+    conn = get_connection()
+    increment_str = " + 1" if increment else ""
+    try:
+        conn.execute(
+            f"""
+            UPDATE device_status
+            SET status = ?, retry_count = COALESCE(retry_count, 0){increment_str}
+            WHERE device_cluster = ? AND device_id = ?
+            """,
+            (status, device_cluster, device_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_device_status(
     device_cluster: str,
     device_id: str,
@@ -170,7 +202,8 @@ def get_device_status(
     conn = get_connection()
     try:
         row = conn.execute(
-            """SELECT device_cluster, device_id, current_model, status, last_heartbeat
+            """SELECT device_cluster, device_id, current_model, status, last_heartbeat,
+                      COALESCE(retry_count, 0) AS retry_count
                FROM device_status WHERE device_cluster = ? AND device_id = ?""",
             (device_cluster, device_id),
         ).fetchone()

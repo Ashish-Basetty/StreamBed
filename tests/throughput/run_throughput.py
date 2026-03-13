@@ -13,8 +13,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from shared.inference.mobilenet import MobileNetV2Model
 from shared.interfaces.stream_interface import StreamBedUDPSender, StreamFrame
+from tests.docker_utils import DockerComposeManager
 
-COMPOSE_FILE = os.path.join(os.path.dirname(__file__), "docker-compose.yml")
+MANAGER = DockerComposeManager(
+    compose_file="tests/throughput/docker-compose.yml",
+    project_name="streambed-throughput",
+)
 VIDEO_PATH = os.path.join(os.path.dirname(__file__), "test_video.mp4")
 SERVER_URL = "http://localhost:8001"
 PROXY_HOST = "127.0.0.1"
@@ -63,27 +67,15 @@ def run(cmd, **kwargs):
 
 
 def compose_down():
-    run(["docker", "compose", "-f", COMPOSE_FILE, "down", "--remove-orphans"])
+    MANAGER.down_services()
 
 
 def compose_up(env):
-    e = os.environ.copy()
-    e.update(env)
-    subprocess.Popen(
-        ["docker", "compose", "-f", COMPOSE_FILE, "up", "-d"],
-        env=e,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    MANAGER.up_services(env=env)
 
 
 def restart_proxy(env):
-    e = os.environ.copy()
-    e.update(env)
-    run(
-        ["docker", "compose", "-f", COMPOSE_FILE, "up", "-d", "--force-recreate", "proxy"],
-        env=e,
-    )
+    MANAGER.up_services(services=["proxy"], env=env, flags={"force_recreate": True})
 
 
 def get_frame_count():
@@ -215,7 +207,15 @@ def main():
     data = precompute(N_FRAMES)
 
     print("building images...")
-    run(["docker", "compose", "-f", COMPOSE_FILE, "build"])
+    run(
+        [
+            "docker", "compose",
+            "-f", str(MANAGER.compose_file),
+            "-p", MANAGER.project_name,
+            "build",
+        ],
+        cwd=str(MANAGER.project_root),
+    )
 
     compose_down()
     compose_up({"DELAY_MS": "0", "LOSS_PCT": "0"})

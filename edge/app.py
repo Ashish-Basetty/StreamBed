@@ -24,9 +24,9 @@ from edge_config import (
     DEVICE_CLUSTER,
     DEVICE_ID,
     MODEL_DEVICE,
-    SERVER_HOST,
-    SERVER_PORT,
     STORAGE_DIR,
+    STREAM_PROXY_HOST,
+    STREAM_PROXY_PORT,
     TTL_MAX,
     TTL_MIN,
     VIDEO_SOURCE,
@@ -119,39 +119,20 @@ async def heartbeat_loop():
         await asyncio.sleep(30)
 
 
-async def config_poll_loop():
-    """Periodically ask the controller what we should be running."""
+CONNECT_RETRY_INTERVAL = 5
+async def _connect_to_proxy_with_retry() -> None:
+    """Retry connecting to stream proxy until success. Spins if host is unset or unreachable."""
     while True:
-        if CONTROLLER_URL and CONTROLLER_URL.strip():
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    resp = await client.get(
-                        f"{CONTROLLER_URL.rstrip('/')}/config",
-                        params={
-                            "device_cluster": DEVICE_CLUSTER,
-                            "device_id": DEVICE_ID,
-                        },
-                    )
-                    if resp.status_code == 200:
-                        cfg = resp.json()
-                        # example fields – adjust to whatever your controller returns
-                        model_img = cfg.get("model_image")
-                        target = cfg.get("stream_target") or {}
-                        ip = target.get("ip")
-                        port = target.get("port")
-
-                        # 1. if the controller has asked for a new container/model,
-                        #    trigger the deployment daemon (or directly pull & restart).
-                        # 2. if the stream target changed, update sender/receiver.
-                        #    (the sender/receiver already have a `connect`/`listen`
-                        #    method you can call again here).
-                        #
-                        # The code below is a stub; replace with real logic.
-                        if ip and port:
-                            await sender.connect(ip, port)   # edge only
-            except Exception as e:
-                print(f"[Edge] config poll failed: {e}")
-        await asyncio.sleep(POLL_INTERVAL)
+        if not (STREAM_PROXY_HOST and STREAM_PROXY_HOST.strip()):
+            print("[Edge] STREAM_PROXY_HOST not set, waiting...")
+            await asyncio.sleep(CONNECT_RETRY_INTERVAL)
+            continue
+        try:
+            await sender.connect(STREAM_PROXY_HOST, STREAM_PROXY_PORT)
+            return
+        except Exception as e:
+            print(f"[Edge] Cannot connect to {STREAM_PROXY_HOST}:{STREAM_PROXY_PORT}: {e}, retrying in {CONNECT_RETRY_INTERVAL}s...")
+            await asyncio.sleep(CONNECT_RETRY_INTERVAL)
 
 
 @asynccontextmanager
@@ -160,19 +141,19 @@ async def lifespan(app: FastAPI):
     model.load()
     print("[Edge] Model loaded.")
 
-    await sender.connect(SERVER_HOST, SERVER_PORT)
-
     # capture_task = asyncio.create_task(video_capture_loop())
     cleanup_task = asyncio.create_task(ttl_cleanup_loop())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
-    config_task  = asyncio.create_task(config_poll_loop())
+    # config_task  = asyncio.create_task(config_poll_loop())
+
+    await _connect_to_proxy_with_retry()
 
     yield
 
     # capture_task.cancel()
     cleanup_task.cancel()
     heartbeat_task.cancel()
-    config_task.cancel()
+    # config_task.cancel()
     await sender.close()
 
 

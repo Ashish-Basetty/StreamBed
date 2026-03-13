@@ -2,11 +2,14 @@
 
 ## Overview
 
-Your StreamBed controller can now automatically detect when servers fail and reroute edge devices to healthy servers. Here's how:
+Your StreamBed controller can now automatically detect when servers fail and reroute edge devices to healthy servers. It can also attempt to restart failed edge devices. Here's how:
 
 ```
 Server1 stops sending heartbeats → Controller detects missing heartbeat →
 Updates stream-target.json on Edge1 → Edge1 reconnects to Server2
+
+Edge1 stops sending heartbeats → Controller detects failure →
+Attempts to restart Edge1's container → Edge1 recovers and resumes streaming
 ```
 
 ## How It Works
@@ -17,7 +20,8 @@ The controller continuously monitors device heartbeats:
 2. **Controller tracks them** - Records `last_heartbeat` timestamp
 3. **Failure detection** - If no heartbeat > 30 seconds, marks as UNRESPONSIVE
 4. **Auto-failover** - Detects downed servers, updates `stream-target.json` on edges
-5. **Edges reconnect** - They already poll `stream-target.json`, so they reconnect automatically
+5. **Edge restart** - Detects downed edges, attempts to redeploy their containers
+6. **Edges reconnect** - They already poll `stream-target.json`, so they reconnect automatically
 
 ## Setup (Simple!)
 
@@ -210,6 +214,5 @@ asyncio.run(test_auto_failover())
 - ✅ `controller/ControllerNode/main.py` - Added health monitor integration
 - ✅ `controller/ControllerNode/db.py` - Added status query functions
 - ✅ `controller/ControllerNode/health_monitor.py` - NEW: Failure detection logic
-- ✅ `shared/heartbeat_manager.py` - NEW: Heartbeat sender for devices
 - ✅ `shared/edge_stream_manager.py` - NEW: Example edge integration
 - ✅ `tests/test_failure_detection.py` - NEW: Integration tests

@@ -7,6 +7,7 @@ The controller now includes automatic failure detection and failover capabilitie
 1. **Monitors heartbeats** from all servers and edge devices
 2. **Detects failures** when devices stop sending heartbeats
 3. **Automatically reroutes** edge devices to healthy servers by updating `stream-target.json`
+4. **Attempts to restart** failed edge devices by redeploying their containers
 
 ## Architecture
 
@@ -26,10 +27,22 @@ Controller Node (port 8080)
     └─ Health Monitor (async background task):
         ├─ Polls device status every ~5 seconds
         ├─ Detects unresponsive devices (no heartbeat > 30 seconds)
-        └─ Automatically calls /stream-target on edge daemons to reroute
+        ├─ Automatically calls /stream-target on edge daemons to reroute
+        └─ Attempts to restart failed edge devices by redeploying containers
 ```
 
 ## Configuration
+
+### Startup Initialization
+
+At controller startup, the following occurs:
+
+1. The database schema is initialized (tables for devices, device_status, routing, etc.).
+2. Devices are registered using the configuration from Docker Compose (service name as IP, correct port).
+3. The routing table is initialized: each edge is assigned to the first available server in its cluster if not already present.
+4. The health monitor is started as an async background task.
+
+This ensures the devices and routing tables are always in sync with your deployment.
 
 The health monitor is controlled by environment variables on the controller:
 
@@ -77,6 +90,32 @@ Edge Device (polls every ~5 seconds):
   └─ Sees target changed to server2
   └─ Reconnects StreamBedUDPSender to server2
   └─ Continues sending frames to server2
+```
+
+### 4. Edge Device Failure Detected
+
+```
+Controller Health Monitor:
+  ├─ edge1: last heartbeat 45s ago → UNRESPONSIVE ✗
+  └─ Edge restart triggered: Check deployment history
+      ├─ Last deployment: edge-image:v1.2
+      ├─ Attempt redeploy to edge1
+      └─ Call HTTP POST to edge1's daemon:
+          POST http://edge1_ip:9090/deploy
+          {
+              "image": "edge-image:v1.2",
+              "host_port": 8080,
+              "container_port": 80
+          }
+```
+
+### 5. Edge Device Recovers
+
+```
+Edge Device (after container restart):
+  └─ Container starts and begins sending heartbeats
+  └─ Controller detects heartbeats → marks as ACTIVE ✓
+  └─ Streaming resumes to configured target server
 ```
 
 ## API Usage Examples
@@ -301,7 +340,15 @@ async def poll_stream_target(config_path: Path, sender: StreamBedUDPSender):
 
 ## Database Schema
 
-The controller maintains these tables:
+### Database Initialization Logic
+
+On startup, the controller ensures:
+
+- All devices from the Docker Compose config are registered in the devices table with their correct service name and port.
+- The routing table is initialized so each edge is routed to a healthy server (first available in its cluster).
+- These steps are performed before the health monitor starts, so failover logic always has up-to-date device and routing info.
+
+#### Example tables:
 
 ```sql
 -- Device registry

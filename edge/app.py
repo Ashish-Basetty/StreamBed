@@ -162,14 +162,14 @@ async def lifespan(app: FastAPI):
 
     await sender.connect(SERVER_HOST, SERVER_PORT)
 
-    capture_task = asyncio.create_task(video_capture_loop())
+    # capture_task = asyncio.create_task(video_capture_loop())
     cleanup_task = asyncio.create_task(ttl_cleanup_loop())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
     config_task  = asyncio.create_task(config_poll_loop())
 
     yield
 
-    capture_task.cancel()
+    # capture_task.cancel()
     cleanup_task.cancel()
     heartbeat_task.cancel()
     config_task.cancel()

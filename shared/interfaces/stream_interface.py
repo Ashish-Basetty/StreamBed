@@ -275,26 +275,3 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
             while not self._queue.empty():
                 _ = self._queue.get_nowait()
             self._queue = None
-
-
-class MockStreamSender(StreamSenderInterface):
-    async def connect(self, server_host, server_port):
-        print(f"[MockSender] connect({server_host}:{server_port})")
-
-    async def send(self, frame):
-        return True
-
-    async def close(self):
-        pass
-
-
-class MockStreamReceiver(StreamReceiverInterface):
-    async def listen(self, host, port):
-        print(f"[MockReceiver] listen({host}:{port})")
-
-    async def receive_stream(self):
-        return
-        yield
-
-    async def stop(self):
-        pass

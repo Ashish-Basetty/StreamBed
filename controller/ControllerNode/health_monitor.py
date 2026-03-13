@@ -189,6 +189,7 @@ class HealthMonitor:
             logger.info(f"{cluster}/{device}: {prev} -> {state}")
 
             # SERVER FAILURE EVENT
+            # TODO: load balance and attempt server restart
             if device.startswith("server") and state == "UNRESPONSIVE":
 
                 if healthy_servers:

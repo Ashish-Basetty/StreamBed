@@ -1,7 +1,10 @@
 """SQLite database setup and access for the controller node."""
+import os
 import sqlite3
 from pathlib import Path
+import sys
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from shared.interfaces.heartbeat_spec import HeartbeatStatus
 
 DB_PATH = Path(__file__).parent / "data" / "controller.db"
@@ -51,8 +54,7 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_devices_cluster ON devices(device_cluster);
             CREATE INDEX IF NOT EXISTS idx_status_heartbeat ON device_status(last_heartbeat);
-        """)
-        # Migration: add port column if missing (daemon listen port, default 9090)
+        """)        # Migration: add port column if missing (daemon listen port, default 9090)
         try:
             conn.execute("ALTER TABLE devices ADD COLUMN port INTEGER")
         except sqlite3.OperationalError:
@@ -158,3 +160,91 @@ def update_heartbeat(
         conn.commit()
     finally:
         conn.close()
+
+
+def get_device_status(
+    device_cluster: str,
+    device_id: str,
+) -> dict | None:
+    """Get the status record for a device. Returns None if no status exists."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT device_cluster, device_id, current_model, status, last_heartbeat
+               FROM device_status WHERE device_cluster = ? AND device_id = ?""",
+            (device_cluster, device_id),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_all_devices_in_cluster(
+    device_cluster: str,
+) -> list[dict]:
+    """Get all devices registered in a cluster."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT device_cluster, device_id, ip, port, registered_at
+               FROM devices WHERE device_cluster = ?""",
+            (device_cluster,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def record_deployment(
+    device_cluster: str,
+    device_id: str,
+    image: str,
+    host_port: int | None = None,
+    container_port: int | None = None,
+) -> None:
+    """Record a successful deployment for a device."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO deployments (device_cluster, device_id, image, host_port, container_port, deployed_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(device_cluster, device_id) DO UPDATE SET
+                image = excluded.image,
+                host_port = excluded.host_port,
+                container_port = excluded.container_port,
+                deployed_at = CURRENT_TIMESTAMP
+            """,
+            (device_cluster, device_id, image, host_port, container_port),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_last_deployment(
+    device_cluster: str,
+    device_id: str,
+) -> dict | None:
+    """Get the last deployment record for a device. Returns None if no deployment exists."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT device_cluster, device_id, image, host_port, container_port, deployed_at
+               FROM deployments WHERE device_cluster = ? AND device_id = ?
+               ORDER BY deployed_at DESC LIMIT 1""",
+            (device_cluster, device_id),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_device_status(
+    device_cluster: str,
+    device_id: str,
+    current_model: str | None = None,
+    status: HeartbeatStatus | str | None = None,
+) -> None:
+    """Convenience wrapper to update device status (same as update_heartbeat)."""
+    update_heartbeat(device_cluster, device_id, current_model, status)

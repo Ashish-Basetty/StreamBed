@@ -1,6 +1,7 @@
 """StreamBed controller node - SQLite-backed API server."""
 from contextlib import asynccontextmanager
 
+import logging
 import os
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -8,16 +9,113 @@ from pydantic import BaseModel
 
 from db import get_connection, init_db, register_device, update_heartbeat
 from deploy import DeployError, DeviceNotFoundError, deploy_to_device, delete_container_from_device
+from health_monitor import create_and_start_monitor, HealthMonitor
 from shared.interfaces.heartbeat_spec import HeartbeatStatus
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Health monitor instance (started in lifespan)
+health_monitor: HealthMonitor | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+
+    global health_monitor
     init_db()
+
+    # Register devices at startup using Docker Compose config (edit as needed)
+    DOCKER_DEVICES = [
+        {"device_cluster": "default", "device_id": "server-001", "ip": "server1", "port": 9000},
+        {"device_cluster": "default", "device_id": "server-002", "ip": "server2", "port": 9000},
+        {"device_cluster": "default", "device_id": "edge-001",   "ip": "edge1",   "port": 8000},
+        {"device_cluster": "default", "device_id": "edge-002",   "ip": "edge2",   "port": 8000},
+        {"device_cluster": "default", "device_id": "edge-003",   "ip": "edge3",   "port": 8000},
+    ]
+    for dev in DOCKER_DEVICES:
+        register_device(dev["device_cluster"], dev["device_id"], dev["ip"], dev["port"])
+        logger.info(f"[INIT] Registered device: {dev['device_cluster']}/{dev['device_id']} ({dev['ip']}:{dev['port']})")
+
+    # Initialize routing table: assign each edge to the first available server in its cluster if not already present
+    conn = get_connection()
+    try:
+        clusters = conn.execute("SELECT DISTINCT device_cluster FROM devices").fetchall()
+        for row in clusters:
+            cluster = row[0]
+            devices = conn.execute("SELECT device_id FROM devices WHERE device_cluster=?", (cluster,)).fetchall()
+            servers = [d[0] for d in devices if d[0].startswith('server')]
+            edges = [d[0] for d in devices if d[0].startswith('edge')]
+            if not servers:
+                continue
+            target_server = servers[0]
+            for edge in edges:
+                exists = conn.execute(
+                    "SELECT 1 FROM routing WHERE source_cluster=? AND source_device=?",
+                    (cluster, edge)
+                ).fetchone()
+                if not exists:
+                    conn.execute(
+                        """
+                        INSERT INTO routing (source_cluster, source_device, target_cluster, target_device, updated_at)
+                        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        (cluster, edge, cluster, target_server)
+                    )
+                    logger.info(f"[INIT] Routing: {cluster}/{edge} -> {target_server}")
+        conn.commit()
+    except Exception as e:
+        logger.error(f"[INIT] Error initializing routing table: {e}")
+    finally:
+        conn.close()
+
+    # Start health monitoring
+    heartbeat_timeout = int(os.environ.get("HEARTBEAT_TIMEOUT_SECS", "30"))
+    check_interval = int(os.environ.get("HEALTH_CHECK_INTERVAL_SECS", "5"))
+    controller_url = os.environ.get("CONTROLLER_URL")
+    health_monitor = await create_and_start_monitor(
+        heartbeat_timeout_secs=heartbeat_timeout,
+        check_interval_secs=check_interval,
+        controller_url=controller_url,
+    )
+    logger.info(
+        f"Health monitor started (timeout={heartbeat_timeout}s, interval={check_interval}s)"
+    )
+
     yield
+
+    # Stop health monitoring on shutdown
+    if health_monitor:
+        await health_monitor.stop()
+
 
 
 app = FastAPI(title="StreamBed Controller Node", lifespan=lifespan)
+
+# Example configuration data; replace with real config logic as needed
+def get_device_config(device_cluster: str, device_id: str) -> dict:
+    # TODO: Fetch real config from DB or file if needed
+    return {
+        "device_cluster": device_cluster,
+        "device_id": device_id,
+        "config": {
+            "heartbeat_interval": 5,
+            "model_version": "1.0.0",
+        }
+    }
+
+@app.get("/config")
+def get_config(device_cluster: str, device_id: str) -> dict:
+    """Return configuration for a device.
+    edge devices poll this to get their config (e.g. heartbeat interval, model version)."""
+    if not device_cluster or not device_id:
+        raise HTTPException(status_code=400, detail="device_cluster and device_id are required")
+    config = get_device_config(device_cluster, device_id)
+    return config
 
 
 class HeartbeatRequest(BaseModel):
@@ -153,5 +251,24 @@ def list_status(device_cluster: str | None = None) -> dict:
         conn.close()
 
 
+@app.post("/failover")
+async def trigger_failover(device_cluster: str) -> dict:
+    """Manually trigger failover check for a cluster. Useful for testing.
+    Note: failover is automatically triggered by the health monitor when unresponsive devices are detected."""
+    if not device_cluster.strip():
+        raise HTTPException(status_code=400, detail="device_cluster is required")
+    
+    if not health_monitor:
+        raise HTTPException(status_code=500, detail="Health monitor not initialized")
+    
+    try:
+        await health_monitor._handle_cluster_failover(device_cluster)
+        return {"ok": True, "message": f"Failover check triggered for {device_cluster}"}
+    except Exception as e:
+        logger.error(f"Error triggering failover: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)
+

@@ -4,7 +4,7 @@ import os
 import httpx
 import re
 
-from db import get_device_address
+from db import get_device_address, record_deployment
 
 MAX_RETRIES = 3
 RETRY_DELAY_SEC = 2
@@ -52,6 +52,8 @@ def deploy_to_device(
                 resp.raise_for_status()
                 data = resp.json()
                 if data.get("ok"):
+                    # Record successful deployment
+                    record_deployment(device_cluster, device_id, image, host_port, container_port)
                     return data
                 raise DeployError(data.get("error", "Daemon returned failure"))
         except httpx.HTTPStatusError as e:

@@ -14,37 +14,89 @@ services:
     networks:
       - streambed-net
 
-  edge:
+  edge1:
     build:
       context: .
       dockerfile: edge/Dockerfile
     image: ashishbasetty/streambed-edge:latest
-    container_name: streambed-edge
+    container_name: streambed-edge1
+    restart: always
     ports:
       - "8000:8000"
     volumes:
-      - edge-data:/data/streambed
+      - edge1-data:/data/streambed
     environment:
       - DEVICE_ID=edge-001
       - DEVICE_CLUSTER=default
       - CONTROLLER_URL=http://controller:8080
       - STORAGE_DIR=/data/streambed
       - VIDEO_SOURCE=0
-      - SERVER_HOST=server
+      - SERVER_HOST=server1
       - SERVER_PORT=9000
       - MODEL_DEVICE=cpu
     depends_on:
       - controller
-      - server
+      - server1
     networks:
       - streambed-net
 
-  server:
+  edge2:
+    build:
+      context: .
+      dockerfile: edge/Dockerfile
+    image: ashishbasetty/streambed-edge:latest
+    container_name: streambed-edge2
+    restart: always
+    ports:
+      - "8002:8000"
+    volumes:
+      - edge2-data:/data/streambed
+    environment:
+      - DEVICE_ID=edge-002
+      - DEVICE_CLUSTER=default
+      - CONTROLLER_URL=http://controller:8080
+      - STORAGE_DIR=/data/streambed
+      - VIDEO_SOURCE=0
+      - SERVER_HOST=server2
+      - SERVER_PORT=9000
+      - MODEL_DEVICE=cpu
+    depends_on:
+      - controller
+      - server2
+    networks:
+      - streambed-net
+
+  edge3:
+    build:
+      context: .
+      dockerfile: edge/Dockerfile
+    image: ashishbasetty/streambed-edge:latest
+    container_name: streambed-edge3
+    restart: always
+    ports:
+      - "8003:8000"
+    volumes:
+      - edge3-data:/data/streambed
+    environment:
+      - DEVICE_ID=edge-003
+      - DEVICE_CLUSTER=default
+      - CONTROLLER_URL=http://controller:8080
+      - STORAGE_DIR=/data/streambed
+      - VIDEO_SOURCE=0
+      - SERVER_HOST=server1
+      - SERVER_PORT=9000
+      - MODEL_DEVICE=cpu
+    depends_on:
+      - controller
+      - server1
+    networks:
+      - streambed-net
+  server1:
     build:
       context: .
       dockerfile: server/Dockerfile
     image: ashishbasetty/streambed-server:latest
-    container_name: streambed-server
+    container_name: streambed-server1
     ports:
       - "8001:8001"
       - "9000:9000"
@@ -60,8 +112,31 @@ services:
     networks:
       - streambed-net
 
+  server2:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: ashishbasetty/streambed-server:latest
+    container_name: streambed-server2
+    ports:
+      - "8004:8001"
+      - "9001:9000"
+    volumes:
+      - server-data:/data/streambed
+    environment:
+      - DEVICE_ID=server-002
+      - DEVICE_CLUSTER=default
+      - CONTROLLER_URL=http://controller:8080
+      - STORAGE_DIR=/data/streambed
+      - MODEL_DEVICE=cpu
+      - STREAM_LISTEN_PORT=9000
+    networks:
+      - streambed-net
+
 volumes:
-  edge-data:
+  edge1-data:
+  edge2-data:
+  edge3-data:
   server-data:
 
 networks:

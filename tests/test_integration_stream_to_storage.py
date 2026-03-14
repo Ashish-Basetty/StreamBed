@@ -1,6 +1,7 @@
 import asyncio
 
 import numpy as np
+import pytest
 
 from shared.interfaces.stream_interface import (
     StreamBedUDPSender,
@@ -8,6 +9,8 @@ from shared.interfaces.stream_interface import (
     StreamFrame,
 )
 from shared.storage.frame_store import FrameStore
+
+pytestmark = [pytest.mark.integration, pytest.mark.integration_stream]
 
 
 def make_stream_frame(timestamp, frame_id):

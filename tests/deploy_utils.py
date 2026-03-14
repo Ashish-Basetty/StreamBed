@@ -83,6 +83,13 @@ def deploy_all_inference(controller_url: str = "http://localhost:8080") -> None:
                 "container_port": dev["container_port"],
             }
             resp = client.post(f"{base}/deploy", json=payload)
+            if resp.status_code != 200:
+                try:
+                    detail = resp.json().get("detail", resp.text)
+                except Exception:
+                    detail = resp.text
+                print(f"[DEPLOY ERROR] {dev['device_id']}: HTTP {resp.status_code} - {detail}")
+                logger.error("Deploy %s failed: HTTP %s - %s", dev["device_id"], resp.status_code, detail)
             resp.raise_for_status()
             data = resp.json()
             if not data.get("ok"):
@@ -91,6 +98,31 @@ def deploy_all_inference(controller_url: str = "http://localhost:8080") -> None:
             # Stagger deploys so PyTorch containers load one at a time (avoids OOM)
             if dev != DEVICES[-1]:
                 time.sleep(DEPLOY_STAGGER_SEC)
+
+
+def deploy_device(
+    device_id: str,
+    controller_url: str = "http://localhost:8080",
+) -> None:
+    """Deploy a single device via the controller. Raises on failure."""
+    dev = next((d for d in DEVICES if d["device_id"] == device_id), None)
+    if not dev:
+        raise ValueError(f"Unknown device_id: {device_id}")
+    base = controller_url.rstrip("/")
+    payload = {
+        "device_cluster": DEVICE_CLUSTER,
+        "device_id": dev["device_id"],
+        "image": dev["image"],
+        "host_port": dev["host_port"],
+        "container_port": dev["container_port"],
+    }
+    with httpx.Client(timeout=CONTROLLER_TIMEOUT) as client:
+        resp = client.post(f"{base}/deploy", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"Deploy failed for {device_id}: {data.get('error', data)}")
+    logger.info("Deployed %s", device_id)
 
 
 def delete_all_inference(controller_url: str = "http://localhost:8080") -> None:
@@ -103,7 +135,7 @@ def delete_all_inference(controller_url: str = "http://localhost:8080") -> None:
         for dev in DEVICES:
             payload = {"device_cluster": DEVICE_CLUSTER, "device_id": dev["device_id"]}
             try:
-                resp = client.delete(f"{base}/delete", json=payload)
+                resp = client.request("DELETE", f"{base}/delete", json=payload)
                 if resp.status_code == 200:
                     data = resp.json()
                     if data.get("ok"):

@@ -1,6 +1,10 @@
 import asyncio
 
+import pytest
+
 from shared.interfaces.stream_interface import StreamBedUDPSender, StreamBedUDPReceiver, StreamFrame
+
+pytestmark = pytest.mark.unit
 
 
 def make_frame():

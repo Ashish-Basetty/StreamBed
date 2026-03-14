@@ -4,6 +4,8 @@ import pytest
 
 from shared.storage.ttl_manager import TTLManager
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 def manager(tmp_path):

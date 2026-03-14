@@ -4,7 +4,7 @@ import os
 import httpx
 import re
 
-from db import get_device_address, record_deployment
+from db import delete_deployment, get_device_address, record_deployment
 
 MAX_RETRIES = 3
 RETRY_DELAY_SEC = 2
@@ -71,6 +71,7 @@ def deploy_to_device(
 def delete_container_from_device(
     device_cluster: str,
     device_id: str,
+    soft_delete: bool = False # If True, do not remove deployment record from database
 ) -> dict:
     """
     Send delete request to the daemon on the target device.
@@ -91,6 +92,8 @@ def delete_container_from_device(
                 resp.raise_for_status()
                 data = resp.json()
                 if data.get("ok"):
+                    if not soft_delete:
+                        delete_deployment(device_cluster, device_id)
                     return data
                 raise DeployError(data.get("error", "Daemon returned failure"))
         except httpx.HTTPStatusError as e:

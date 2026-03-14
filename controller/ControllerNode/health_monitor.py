@@ -23,6 +23,8 @@ from db import (
     get_device_status,
     get_last_deployment,
     set_device_status_evaluated,
+    get_cluster_deployments,
+    get_cluster_status,
 )
 from deploy import delete_container_from_device, deploy_to_device, DeployError
 from shared.interfaces.heartbeat_spec import HeartbeatStatus
@@ -80,7 +82,6 @@ class HealthMonitor:
         loop_count = 0
         while self.running:
             loop_count += 1
-            logger.info(f"[DEBUG] Monitor loop iteration {loop_count}")
             # allow services time to start
             if datetime.utcnow() - self.start_time < self.startup_grace:
                 logger.info("Startup grace period active")
@@ -92,15 +93,12 @@ class HealthMonitor:
                 await self._sync_stream_targets_from_routing()
                 self._initial_stream_target_synced = True
 
-            logger.info("[DEBUG] Getting clusters for health check")
             clusters = self._get_clusters()
-            logger.info(f"[DEBUG] Clusters found: {clusters}")
 
             for cluster in clusters:
-                logger.info(f"[DEBUG] Evaluating cluster: {cluster}")
                 states = await self._evaluate_cluster(cluster)
-                logger.info(f"[DEBUG] {cluster} states: {states}")
-                await self._process_state_transitions(cluster, states)
+                # logger.info(f"HealthMonitor: {cluster} states: {states}")
+                await self._process_cluster_health(cluster, states)
                 self.prev_device_states.update(states)
             await asyncio.sleep(self.check_interval)
 
@@ -130,13 +128,14 @@ class HealthMonitor:
         retry_count = (status or {}).get("retry_count", 0)
         required_delay = self._restart_delay_for_retry(retry_count)
         if key in self.edge_restart_backoff and now - self.edge_restart_backoff[key] < required_delay:
+            logger.info(f"Waiting for restart cooldown: {required_delay}, {cluster}/{device_id}")
             return False
+        logger.info(f"Attempting restart {cluster}/{device_id}")
         self.edge_restart_backoff[key] = now
         try:
-            delete_container_from_device(cluster, device_id)
+            delete_container_from_device(cluster, device_id, soft_delete=True)
         except DeployError as e:
-            logger.warning(f"Restart {cluster}/{device_id}: delete failed: {e}")
-            return False
+            logger.warning(f"Restart {cluster}/{device_id}: delete failed: {e}, continuing")
 
         last = get_last_deployment(cluster, device_id)
         if not last:
@@ -160,48 +159,39 @@ class HealthMonitor:
     async def _evaluate_cluster(self, cluster: str):
         """Evaluate current health state of all devices."""
 
-        conn = get_connection()
-
-        rows = conn.execute(
-            """
-            SELECT device_id, last_heartbeat
-            FROM device_status
-            WHERE device_cluster=?
-            """,
-            (cluster,),
-        ).fetchall()
-
-        conn.close()
-
         now = datetime.utcnow()
 
         states = {}
+
+        expected = get_cluster_deployments(cluster)
+        rows = get_cluster_status(cluster)
 
         for device_id, last_heartbeat in rows:
 
             if not last_heartbeat:
                 states[device_id] = "UNKNOWN"
                 set_device_status_evaluated(cluster, device_id, HeartbeatStatus.UNKNOWN)
-                asyncio.create_task(asyncio.to_thread(self._attempt_restart, cluster, device_id))
-                continue
+            else:
+                try:
+                    last = datetime.fromisoformat(last_heartbeat)
+                    if now - last > self.heartbeat_timeout:
+                        raise ValueError("heartbeat timeout")
+                    else:
+                        states[device_id] = "ACTIVE"
+                        set_device_status_evaluated(cluster, device_id, HeartbeatStatus.ACTIVE)
+                except Exception:
+                    states[device_id] = "UNRESPONSIVE"
+                    set_device_status_evaluated(cluster, device_id, HeartbeatStatus.UNRESPONSIVE, increment=True)
 
-            try:
-                last = datetime.fromisoformat(last_heartbeat)
-                if now - last > self.heartbeat_timeout:
-                    raise ValueError("heartbeat timeout")
-            except Exception:
-                states[device_id] = "UNRESPONSIVE"
-                set_device_status_evaluated(cluster, device_id, HeartbeatStatus.UNRESPONSIVE, increment=True)
+            # If the device is in the expected deployments and is unresponsive, attempt restart.
+            if device_id in expected and states[device_id] not in {"ACTIVE", "UNKNOWN"}:
                 asyncio.create_task(asyncio.to_thread(self._attempt_restart, cluster, device_id))
-                continue
 
-            states[device_id] = "ACTIVE"
-            set_device_status_evaluated(cluster, device_id, HeartbeatStatus.ACTIVE)
 
         return states
 
-    async def _process_state_transitions(self, cluster: str, states: Dict[str, str]):
-        """Trigger actions when device state changes."""
+    async def _process_cluster_health(self, cluster: str, states: Dict[str, str]):
+        """Process the health of a cluster."""
 
         servers = [d for d in states if d.startswith("server")]
         edges = [d for d in states if d.startswith("edge")]
@@ -210,15 +200,6 @@ class HealthMonitor:
 
         for device, state in states.items():
 
-            prev = self.prev_device_states.get(device)
-
-            if prev == state:
-                continue
-
-            logger.info(f"{cluster}/{device}: {prev} -> {state}")
-
-            # SERVER FAILURE EVENT
-            # TODO: load balance and attempt server restart
             if device.startswith("server") and state == "UNRESPONSIVE":
 
                 if healthy_servers:

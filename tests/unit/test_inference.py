@@ -4,6 +4,8 @@ import pytest
 from shared.inference.mobilenet import MobileNetV2Model
 from shared.inference.base_model import InferenceResult
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(scope="module")
 def model():

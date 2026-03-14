@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import secrets
 from pathlib import Path
@@ -14,6 +15,13 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
+
+# Configure logging (same format as controller)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 _docker_client: docker.DockerClient | None = None
 
@@ -367,5 +375,5 @@ def put_stream_target(body: StreamTargetRequest) -> dict:
 
 
 if __name__ == "__main__":
-    print(f"Deployment daemon running on port {DAEMON_PORT}")
-    uvicorn.run(app, host="0.0.0.0", port=DAEMON_PORT, log_level="warning")
+    logger.info(f"Deployment daemon running on port {DAEMON_PORT}")
+    uvicorn.run(app, host="0.0.0.0", port=DAEMON_PORT, log_level="info")

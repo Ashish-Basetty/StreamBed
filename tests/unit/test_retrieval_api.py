@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from shared.api.retrieval import create_retrieval_router
 from shared.storage.frame_store import FrameStore
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 def client(tmp_path):

@@ -9,6 +9,10 @@ This test:
 5. Verifies frames now arrive at server2
 """
 import asyncio
+
+import pytest
+
+pytestmark = [pytest.mark.integration, pytest.mark.integration_stream]
 import json
 import os
 import sys

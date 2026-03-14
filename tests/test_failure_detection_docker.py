@@ -9,7 +9,9 @@ import time
 
 import pytest
 
-from tests.deploy_utils import inference_container_running, kill_inference_container
+from tests.deploy_utils import deploy_device, inference_container_running, kill_inference_container
+
+pytestmark = [pytest.mark.integration, pytest.mark.integration_docker]
 
 
 class TestFailureDetectionDocker:
@@ -88,6 +90,10 @@ class TestFailureDetectionDocker:
 
         # Controller should still be running
         assert manager.service_running("controller"), "Controller should remain running after server failure."
+
+        # Restore server-001 so the next test has a clean state
+        deploy_device("server-001", controller_url="http://localhost:8080")
+        time.sleep(5)  # Allow server to start and send heartbeats
 
         print("[PASS] Server failure detected, controller stable, and edge rerouting checked.")
 

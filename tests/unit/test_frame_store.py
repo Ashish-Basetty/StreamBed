@@ -7,6 +7,8 @@ import pytest
 
 from shared.storage.frame_store import FrameStore
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 def store(tmp_path):

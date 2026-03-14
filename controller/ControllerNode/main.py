@@ -29,18 +29,6 @@ async def lifespan(app: FastAPI):
     global health_monitor
     init_db()
 
-    # Register devices at startup using Docker Compose config (edit as needed)
-    DOCKER_DEVICES = [
-        {"device_cluster": "default", "device_id": "server-001", "ip": "daemon-server1", "port": 9090},
-        {"device_cluster": "default", "device_id": "server-002", "ip": "daemon-server2", "port": 9090},
-        {"device_cluster": "default", "device_id": "edge-001",   "ip": "daemon-edge1",   "port": 9090},
-        {"device_cluster": "default", "device_id": "edge-002",   "ip": "daemon-edge2",   "port": 9090},
-        {"device_cluster": "default", "device_id": "edge-003",   "ip": "daemon-edge3",   "port": 9090},
-    ]
-    for dev in DOCKER_DEVICES:
-        register_device(dev["device_cluster"], dev["device_id"], dev["ip"], dev["port"])
-        logger.info(f"[INIT] Registered device: {dev['device_cluster']}/{dev['device_id']} ({dev['ip']}:{dev['port']})")
-
     # Initialize routing table: assign each edge to the first available server in its cluster if not already present
     conn = get_connection()
     try:
@@ -249,25 +237,6 @@ def list_status(device_cluster: str | None = None) -> dict:
         return {"status": [dict(row) for row in rows]}
     finally:
         conn.close()
-
-
-@app.post("/failover")
-async def trigger_failover(device_cluster: str) -> dict:
-    """Manually trigger failover check for a cluster. Useful for testing.
-    Note: failover is automatically triggered by the health monitor when unresponsive devices are detected."""
-    if not device_cluster.strip():
-        raise HTTPException(status_code=400, detail="device_cluster is required")
-    
-    if not health_monitor:
-        raise HTTPException(status_code=500, detail="Health monitor not initialized")
-    
-    try:
-        await health_monitor._handle_cluster_failover(device_cluster)
-        return {"ok": True, "message": f"Failover check triggered for {device_cluster}"}
-    except Exception as e:
-        logger.error(f"Error triggering failover: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)

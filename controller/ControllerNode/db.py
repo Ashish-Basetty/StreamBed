@@ -255,6 +255,19 @@ def record_deployment(
         conn.close()
 
 
+def delete_deployment(device_cluster: str, device_id: str) -> None:
+    """Remove deployment record for a device (e.g. after container delete)."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM deployments WHERE device_cluster = ? AND device_id = ?",
+            (device_cluster, device_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_last_deployment(
     device_cluster: str,
     device_id: str,
@@ -269,6 +282,33 @@ def get_last_deployment(
             (device_cluster, device_id),
         ).fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_cluster_status(device_cluster: str) -> list:
+    """Return (device_id, last_heartbeat) rows for each device in the cluster."""
+    conn = get_connection()
+    try:
+        return conn.execute(
+            "SELECT device_id, last_heartbeat FROM device_status WHERE device_cluster = ?",
+            (device_cluster,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def get_cluster_deployments(device_cluster: str) -> dict[str, dict]:
+    """Get all deployment records for a cluster. Returns list of deployment dicts."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT device_cluster, device_id, image, host_port, container_port, deployed_at
+               FROM deployments WHERE device_cluster = ?
+               ORDER BY device_id""",
+            (device_cluster,),
+        ).fetchall()
+        return {row["device_id"]: dict(row) for row in rows}
     finally:
         conn.close()
 

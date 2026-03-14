@@ -14,6 +14,9 @@ __pycache__/
 # pytest cache
 .pytest_cache/
 
+# Test failure logs (controller logs on integration_docker failures)
+tests/logs/
+
 # virtual environments
 venv/
 .env

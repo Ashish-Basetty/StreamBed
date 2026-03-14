@@ -10,6 +10,8 @@ from shared.interfaces.stream_interface import (
     StreamFrame,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def make_frame(ts, src):
     return StreamFrame(

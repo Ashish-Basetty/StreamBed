@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from tests.deploy_utils import delete_all_inference, deploy_all_inference
+from tests.deploy_utils import (
+    _wait_for_controller,
+    _wait_for_daemons,
+    delete_all_inference,
+    delete_device,
+    deploy_all_inference,
+)
 from tests.docker_utils import DockerComposeManager
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -40,6 +46,35 @@ def deployed_inference_stack():
     yield manager
 
     delete_all_inference(controller_url="http://localhost:8080")
+    manager.down_services()
+
+
+@pytest.fixture(scope="module")
+def deployment_stack():
+    """
+    Module-scoped fixture: brings up controller + daemons only (no auto-deploy).
+    For tests that manually deploy/delete via the controller API.
+    """
+    if _CONTROLLER_DB_PATH.exists():
+        _CONTROLLER_DB_PATH.unlink()
+
+    manager = DockerComposeManager(
+        compose_file="docker-compose.yml",
+        project_name="streambed",
+    )
+    manager.up_services()
+    time.sleep(10)
+    _wait_for_controller("http://localhost:8080")
+    _wait_for_daemons()
+
+    yield manager
+
+    # Clean up deployed containers before tearing down
+    for device_id in ("server-001", "edge-001"):
+        try:
+            delete_device(device_id, controller_url="http://localhost:8080")
+        except Exception:
+            pass
     manager.down_services()
 
 

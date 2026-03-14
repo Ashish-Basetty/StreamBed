@@ -27,7 +27,7 @@ Tests are tagged with pytest markers. Run specific suites:
 |---------|-------------|
 | `pytest tests/ -v -s -m unit` | Unit tests only (fast, no external services) |
 | `pytest tests/ -v -s -m integration_stream` | Stream/network integration tests |
-| `pytest tests/ -v -s -m integration_docker` | Docker-based failure detection (requires Docker) |
+| `pytest tests/ -v -s -m integration_docker` | Docker integration: failure detection, deploy/delete (requires Docker) |
 | `pytest tests/ -v -s -m "integration and not integration_docker"` | Integration tests without Docker |
 
 ### Test layout
@@ -36,6 +36,7 @@ Tests are tagged with pytest markers. Run specific suites:
 - **`tests/test_controller_rerouting.py`** – Integration: edge failure and rerouting to another server.
 - **`tests/test_integration_stream_to_storage.py`** – Integration: UDP stream → frame store.
 - **`tests/test_failure_detection_docker.py`** – Integration: failure detection with Docker and docker-compose.
+- **`tests/test_deployment.py`** – Integration: deploy and delete via controller API (Docker).
 
 ### Run via script
 

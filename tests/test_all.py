@@ -19,7 +19,7 @@ Hierarchy:
     - test_retrieval_api
 
   Integration tests (tests/, require external services):
-    - integration_docker: test_failure_detection_docker (requires Docker)
+    - integration_docker: test_failure_detection_docker, test_deployment (requires Docker)
     - integration_stream: test_controller_rerouting, test_integration_stream_to_storage
 """
 import os
@@ -46,7 +46,7 @@ class TestIntegrationDocker:
     @pytest.mark.integration
     @pytest.mark.integration_docker
     def test_suite_documented(self):
-        """Docker integration suite. Run with: pytest tests/test_failure_detection_docker.py -v -s"""
+        """Docker integration suite. Run with: pytest tests/test_failure_detection_docker.py tests/test_deployment.py -v -s"""
         pass
 
 

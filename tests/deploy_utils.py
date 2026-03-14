@@ -125,6 +125,23 @@ def deploy_device(
     logger.info("Deployed %s", device_id)
 
 
+def delete_device(
+    device_id: str,
+    controller_url: str = "http://localhost:8080",
+) -> dict:
+    """Delete a single device via the controller. Raises on failure."""
+    payload = {"device_cluster": DEVICE_CLUSTER, "device_id": device_id}
+    base = controller_url.rstrip("/")
+    with httpx.Client(timeout=90) as client:
+        resp = client.request("DELETE", f"{base}/delete", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"Delete failed for {device_id}: {data.get('error', data)}")
+    logger.info("Deleted %s", device_id)
+    return data
+
+
 def delete_all_inference(controller_url: str = "http://localhost:8080") -> None:
     """
     Delete all inference containers via the controller.

@@ -1,13 +1,8 @@
 """StreamBed deployment daemon - pulls and runs containers from DockerHub."""
 import asyncio
-import hashlib
 import json
 import logging
-import os
-import secrets
-from pathlib import Path
 
-import platform
 import docker
 import httpx
 import uvicorn
@@ -16,6 +11,32 @@ from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
 from shared.bandwidth import SentRateBackend
+from shared.utils import _deployment_hash, _get_docker, _get_network
+
+from daemon_config import (
+    BANDWIDTH_POLL_INTERVAL,
+    CONTROLLER_URL,
+    DAEMON_ADDRESS,
+    DAEMON_PORT,
+    DEFAULT_CONTAINER_PORT,
+    DEFAULT_HOST_PORT,
+    DEVICE_CLUSTER,
+    DEVICE_ID,
+    MAX_FRAME_PAYLOAD_BYTES,
+    STATE_PATH,
+    STREAM_PROXY_HOST,
+    STREAM_PROXY_PORT,
+    STREAM_TARGET_PATH,
+    STREAM_TARGET_POLL_INTERVAL,
+    STREAMBED_CONFIG_HOST_PATH,
+    STREAMBED_DATA_HOST_PATH,
+    STREAMBED_MEMORY_LIMIT,
+    VIDEO_SOURCE,
+    REGISTER_RETRIES,
+    REGISTER_RETRY_DELAY,
+)
+from stream_proxy_manager import StreamProxyManager
+from tcp_utils import _UDPSendOnlyProtocol, handle_tcp_stream
 
 
 # Configure logging (same format as controller)
@@ -25,22 +46,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-_docker_client: docker.DockerClient | None = None
-
-
-def _get_docker() -> docker.DockerClient:
-    global _docker_client
-    if _docker_client is None:
-        _docker_client = docker.from_env()
-    return _docker_client
-
-def _get_network(client: docker.DockerClient) -> str | None:
-    with open("/etc/hostname") as f:
-        container_id = f.read().strip()
-    container = client.containers.get(container_id)
-    networks = container.attrs["NetworkSettings"]["Networks"]
-    network_name = list(networks.keys())[0] if networks else None
-    return network_name
 
 class DeployRequest(BaseModel):
     image: str
@@ -52,38 +57,6 @@ class DeployRequest(BaseModel):
 class StreamTargetRequest(BaseModel):
     target_ip: str
     target_port: int
-
-
-STATE_PATH = Path(__file__).parent / "data" / "deployed.json"
-STREAM_TARGET_PATH = Path(__file__).parent / "data" / "stream-target.json"
-DEFAULT_HOST_PORT = int(os.environ.get("STREAMBED_HOST_PORT", "8080"))
-DEFAULT_CONTAINER_PORT = int(os.environ.get("STREAMBED_CONTAINER_PORT", "80"))
-
-DAEMON_PORT = int(os.environ.get("DAEMON_PORT", "9090"))
-DAEMON_ADDRESS = os.environ.get("DAEMON_ADDRESS", platform.node())
-
-CONTROLLER_URL = os.environ.get("CONTROLLER_URL")
-if not CONTROLLER_URL or not CONTROLLER_URL.strip():
-    raise ValueError("CONTROLLER_URL is not set")
-
-DEVICE_ID = os.environ.get("DEVICE_ID")
-if not DEVICE_ID:
-    raise ValueError("DEVICE_ID is not set")
-
-DEVICE_CLUSTER = os.environ.get("DEVICE_CLUSTER")
-if not DEVICE_CLUSTER:
-    raise ValueError("DEVICE_CLUSTER is not set")
-
-STREAM_PROXY_PORT = int(os.environ.get("STREAM_PROXY_PORT", "9000"))
-STREAM_TARGET_POLL_INTERVAL = float(os.environ.get("STREAM_TARGET_POLL_INTERVAL", "2.0"))
-BANDWIDTH_POLL_INTERVAL = float(os.environ.get("BANDWIDTH_POLL_INTERVAL", "1.0"))
-# Memory limit for inference containers (edge/server) - PyTorch needs ~4–6GB
-STREAMBED_MEMORY_LIMIT = os.environ.get("STREAMBED_MEMORY_LIMIT", "6g")
-
-
-def _deployment_hash() -> str:
-    """Generate a unique hash for this deployment."""
-    return hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:12]
 
 
 def _load_state() -> dict | None:
@@ -131,99 +104,6 @@ def _save_stream_target(target_ip: str, target_port: int) -> None:
     )
 
 
-class StreamProxyManager:
-    """Singleton manager for stream proxy state (target, transport, protocol)."""
-
-    _instance: "StreamProxyManager | None" = None
-
-    def __new__(cls) -> "StreamProxyManager":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __init__(self) -> None:
-        if hasattr(self, "_initialized"):
-            return
-        self._initialized = True
-        self._target: dict[str, str | int | None] = {"ip": None, "port": None}
-        self._transport: asyncio.DatagramTransport | None = None
-        self._protocol: "StreamProxyProtocol | None" = None
-        self._print_invalid_dest = False
-        self._estimator: SentRateBackend | None = None
-        self.target_bitrate: float | None = None
-
-    def set_estimator(self, estimator: SentRateBackend) -> None:
-        self._estimator = estimator
-
-    def get_estimator(self) -> SentRateBackend | None:
-        return self._estimator
-
-    def update_estimator_bytes_sent(self, n: int) -> None:
-        """Notify the estimator of bytes sent. No-op if no estimator; swallows errors."""
-        try:
-            self._estimator.on_bytes_sent(n)
-        except Exception:
-            pass
-
-    def set_target(self, ip: str, port: int) -> None:
-        self._target["ip"] = ip
-        self._target["port"] = port
-        self._print_invalid_dest = False
-
-    def get_target(self) -> tuple[str | None, int | None]:
-        return self._target["ip"], self._target["port"]
-
-    def set_transport(self, transport: asyncio.DatagramTransport) -> None:
-        self._transport = transport
-
-    def set_protocol(self, protocol: "StreamProxyProtocol") -> None:
-        self._protocol = protocol
-
-    def invalid_logged(self) -> bool:
-        return self._print_invalid_dest
-
-    def mark_invalid_logged(self) -> None:
-        self._print_invalid_dest = True
-
-    def reset_invalid_logged(self) -> None:
-        self._print_invalid_dest = False
-
-    def close(self) -> None:
-        if self._transport:
-            self._transport.close()
-            self._transport = None
-        self._protocol = None
-
-
-class StreamProxyProtocol(asyncio.DatagramProtocol):
-    """UDP proxy: receives on listen port, forwards to current stream-target."""
-
-    def __init__(self, manager: StreamProxyManager):
-        self.transport: asyncio.DatagramTransport | None = None
-        self._manager = manager
-
-    def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        self.transport = transport
-        self._manager.set_transport(transport)
-        self._manager.set_protocol(self)
-
-    def datagram_received(self, data: bytes, addr: tuple) -> None:
-        ip, port = self._manager.get_target()
-        try:
-            self.transport.sendto(data, (ip, port))
-            self._manager.update_estimator_bytes_sent(len(data))
-        except (OSError, TypeError):
-            if not self._manager.invalid_logged():
-                print("[Daemon] Invalid proxy target, dropping datagrams")
-                self._manager.mark_invalid_logged()
-
-    def error_received(self, exc: Exception) -> None:
-        pass
-
-    def connection_lost(self, exc: Exception | None) -> None:
-        pass
-
-
 async def _stream_proxy_target_poll_loop(manager: StreamProxyManager) -> None:
     """Periodically reload stream-target.json and update proxy destination."""
     while True:
@@ -238,23 +118,25 @@ async def _bandwidth_poll_loop(manager: StreamProxyManager) -> None:
     while True:
         estimator = manager.get_estimator()
         if estimator is not None:
-            manager.target_bitrate = estimator.get_target_bps()
+            manager.update_target_bitrate(estimator.get_target_bps())
         await asyncio.sleep(BANDWIDTH_POLL_INTERVAL)
 
 
-async def _run_stream_proxy(manager: StreamProxyManager) -> None:
-    """Start UDP proxy on STREAM_PROXY_PORT. Only for edge daemons."""
+async def _run_stream_tcp_server(manager: StreamProxyManager) -> None:
+    """Start TCP server for edge connections and UDP transport for forwarding. Edge daemons only."""
     loop = asyncio.get_running_loop()
-    transport, _ = await loop.create_datagram_endpoint(
-        lambda: StreamProxyProtocol(manager),
-        local_addr=("0.0.0.0", STREAM_PROXY_PORT),
+    udp_transport, _ = await loop.create_datagram_endpoint(
+        lambda: _UDPSendOnlyProtocol(),
+        local_addr=("0.0.0.0", 0),
     )
-    print(f"[Daemon] Stream proxy listening on 0.0.0.0:{STREAM_PROXY_PORT} (target from stream-target.json)")
-    await asyncio.Future()  # run forever
-
-
-_REGISTER_RETRIES = 5
-_REGISTER_RETRY_DELAY = 2.0
+    manager.set_udp_transport(udp_transport)
+    server = await asyncio.start_server(
+        lambda r, w: handle_tcp_stream(r, w, manager, MAX_FRAME_PAYLOAD_BYTES),
+        "0.0.0.0",
+        STREAM_PROXY_PORT,
+    )
+    logger.info(f"[Daemon] Stream TCP server on 0.0.0.0:{STREAM_PROXY_PORT} (target from stream-target.json)")
+    await server.serve_forever()
 
 
 async def _register_with_retries() -> None:
@@ -309,7 +191,7 @@ async def lifespan(app: FastAPI):
     if DEVICE_ID.startswith("edge-"):
         stream_proxy_manager.set_estimator(SentRateBackend())
         poll_task = asyncio.create_task(_stream_proxy_target_poll_loop(stream_proxy_manager))
-        proxy_task = asyncio.create_task(_run_stream_proxy(stream_proxy_manager))
+        proxy_task = asyncio.create_task(_run_stream_tcp_server(stream_proxy_manager))
         bandwidth_task = asyncio.create_task(_bandwidth_poll_loop(stream_proxy_manager))
 
     yield
@@ -370,7 +252,7 @@ def deploy(body: DeployRequest) -> dict:
         # 2. Stop old container to free the host port (can't have two containers on same port)
         state = _load_state()
         if state:
-            old_container = f"streambed-{state['container_hash']}"
+            old_container = f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-{state['container_hash']}"
             _stop_and_remove(old_container)
 
         # 3. Run new container with port mapping, volumes, and memory limit (PyTorch needs ~1–2GB)
@@ -381,12 +263,10 @@ def deploy(body: DeployRequest) -> dict:
             "mem_limit": STREAMBED_MEMORY_LIMIT,
         }
         volumes = {}
-        config_dir = os.environ.get("STREAMBED_CONFIG_HOST_PATH")
-        if config_dir:
-            volumes[config_dir] = {"bind": "/config", "mode": "ro"}
-        data_dir = os.environ.get("STREAMBED_DATA_HOST_PATH")
-        if data_dir:
-            volumes[data_dir] = {"bind": "/data/streambed", "mode": "rw"}
+        if STREAMBED_CONFIG_HOST_PATH:
+            volumes[STREAMBED_CONFIG_HOST_PATH] = {"bind": "/config", "mode": "ro"}
+        if STREAMBED_DATA_HOST_PATH:
+            volumes[STREAMBED_DATA_HOST_PATH] = {"bind": "/data/streambed", "mode": "rw"}
         if volumes:
             run_kwargs["volumes"] = volumes
 
@@ -403,15 +283,11 @@ def deploy(body: DeployRequest) -> dict:
             "DEVICE_CLUSTER": DEVICE_CLUSTER,
             "CONTROLLER_URL": CONTROLLER_URL,
         }
-        video_source = os.environ.get("VIDEO_SOURCE")
-        if video_source:
-            container_env["VIDEO_SOURCE"] = video_source
-        # Edges send to daemon's stream proxy; pass host and port
+        if VIDEO_SOURCE:
+            container_env["VIDEO_SOURCE"] = VIDEO_SOURCE
         if DEVICE_ID.startswith("edge-"):
-            proxy_host = os.environ.get("STREAM_PROXY_HOST", DAEMON_ADDRESS)
-            proxy_port = int(os.environ.get("STREAM_PROXY_PORT", "9000"))
-            container_env["STREAM_PROXY_HOST"] = proxy_host
-            container_env["STREAM_PROXY_PORT"] = str(proxy_port)
+            container_env["STREAM_PROXY_HOST"] = STREAM_PROXY_HOST
+            container_env["STREAM_PROXY_PORT"] = str(STREAM_PROXY_PORT)
         run_kwargs["environment"] = container_env
 
         client.containers.run(body.image, **run_kwargs)

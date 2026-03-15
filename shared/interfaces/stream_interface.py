@@ -7,16 +7,15 @@ import asyncio
 import json
 import struct
 import io
-import math
 import os
 
 import cv2
 import numpy as np
 
 
-CHUNK_MAGIC = b'CHNK'
+from shared.stream_chunks import CHUNK_MAGIC, make_chunks as _make_chunks_impl
+
 # todo: change to <1400 to avoid IP-level fragmentation, but need to handle more chunks per frame
-CHUNK_SIZE = 8000
 JPEG_MAGIC = b'JPEG'
 
 
@@ -109,12 +108,7 @@ def deserialize_stream_frame(data: bytes) -> StreamFrame:
 
 
 def _make_chunks(stream_id: bytes, payload: bytes) -> list:
-    n = max(1, math.ceil(len(payload) / CHUNK_SIZE))
-    chunks = []
-    for i in range(n):
-        data = payload[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
-        chunks.append(CHUNK_MAGIC + stream_id + struct.pack('>III', i, n, len(data)) + data)
-    return chunks
+    return _make_chunks_impl(payload, stream_id)
 
 
 def _parse_chunk(data: bytes):
@@ -163,6 +157,41 @@ class StreamBedUDPProtocol(asyncio.DatagramProtocol):
 
     def connection_lost(self, exc):
         pass
+
+
+class StreamBedTCPSender(StreamSenderInterface):
+    """Send StreamFrames over TCP as length-prefixed serialized payloads."""
+
+    def __init__(self, use_jpeg: bool = False):
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
+        self._use_jpeg = use_jpeg
+
+    async def connect(self, server_host: str, server_port: int) -> None:
+        self._reader, self._writer = await asyncio.open_connection(server_host, server_port)
+        print(f"[TCPSender] connected to {server_host}:{server_port}")
+
+    async def send(self, frame: StreamFrame) -> bool:
+        if not self._writer:
+            raise RuntimeError("sender is not connected")
+        try:
+            payload = serialize_stream_frame(frame, self._use_jpeg)
+            self._writer.write(struct.pack(">I", len(payload)) + payload)
+            await self._writer.drain()
+            return True
+        except Exception as e:
+            print(f"[TCPSender] failed to send frame: {e}")
+            return False
+
+    async def close(self) -> None:
+        if self._writer:
+            self._writer.close()
+            try:
+                await self._writer.wait_closed()
+            except Exception:
+                pass
+            self._writer = None
+            self._reader = None
 
 
 class StreamBedUDPSender(StreamSenderInterface):

@@ -8,7 +8,8 @@ COPY controller/DeploymentDaemon/requirements.txt .
 # Install Python dependencies (only rebuilds if requirements.txt changes)
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code
+# Copy shared package and daemon code
+COPY shared/ /app/shared/
 COPY controller/DeploymentDaemon/ .
 
 # Expose daemon API port

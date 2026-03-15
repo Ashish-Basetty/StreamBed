@@ -15,6 +15,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
+from shared.bandwidth import SentRateBackend
+
 
 # Configure logging (same format as controller)
 logging.basicConfig(
@@ -74,6 +76,7 @@ if not DEVICE_CLUSTER:
 
 STREAM_PROXY_PORT = int(os.environ.get("STREAM_PROXY_PORT", "9000"))
 STREAM_TARGET_POLL_INTERVAL = float(os.environ.get("STREAM_TARGET_POLL_INTERVAL", "2.0"))
+BANDWIDTH_POLL_INTERVAL = float(os.environ.get("BANDWIDTH_POLL_INTERVAL", "1.0"))
 # Memory limit for inference containers (edge/server) - PyTorch needs ~4–6GB
 STREAMBED_MEMORY_LIMIT = os.environ.get("STREAMBED_MEMORY_LIMIT", "6g")
 
@@ -128,49 +131,122 @@ def _save_stream_target(target_ip: str, target_port: int) -> None:
     )
 
 
-# Mutable container for stream proxy target; updated by poll loop
-_stream_proxy_target: dict = {"ip": None, "port": None}
-_stream_proxy_transport = None
+class StreamProxyManager:
+    """Singleton manager for stream proxy state (target, transport, protocol)."""
+
+    _instance: "StreamProxyManager | None" = None
+
+    def __new__(cls) -> "StreamProxyManager":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self) -> None:
+        if hasattr(self, "_initialized"):
+            return
+        self._initialized = True
+        self._target: dict[str, str | int | None] = {"ip": None, "port": None}
+        self._transport: asyncio.DatagramTransport | None = None
+        self._protocol: "StreamProxyProtocol | None" = None
+        self._print_invalid_dest = False
+        self._estimator: SentRateBackend | None = None
+        self.target_bitrate: float | None = None
+
+    def set_estimator(self, estimator: SentRateBackend) -> None:
+        self._estimator = estimator
+
+    def get_estimator(self) -> SentRateBackend | None:
+        return self._estimator
+
+    def update_estimator_bytes_sent(self, n: int) -> None:
+        """Notify the estimator of bytes sent. No-op if no estimator; swallows errors."""
+        try:
+            self._estimator.on_bytes_sent(n)
+        except Exception:
+            pass
+
+    def set_target(self, ip: str, port: int) -> None:
+        self._target["ip"] = ip
+        self._target["port"] = port
+        self._print_invalid_dest = False
+
+    def get_target(self) -> tuple[str | None, int | None]:
+        return self._target["ip"], self._target["port"]
+
+    def set_transport(self, transport: asyncio.DatagramTransport) -> None:
+        self._transport = transport
+
+    def set_protocol(self, protocol: "StreamProxyProtocol") -> None:
+        self._protocol = protocol
+
+    def invalid_logged(self) -> bool:
+        return self._print_invalid_dest
+
+    def mark_invalid_logged(self) -> None:
+        self._print_invalid_dest = True
+
+    def reset_invalid_logged(self) -> None:
+        self._print_invalid_dest = False
+
+    def close(self) -> None:
+        if self._transport:
+            self._transport.close()
+            self._transport = None
+        self._protocol = None
 
 
 class StreamProxyProtocol(asyncio.DatagramProtocol):
     """UDP proxy: receives on listen port, forwards to current stream-target."""
 
-    def __init__(self):
-        self.transport = None
+    def __init__(self, manager: StreamProxyManager):
+        self.transport: asyncio.DatagramTransport | None = None
+        self._manager = manager
 
-    def connection_made(self, transport):
-        global _stream_proxy_transport
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
         self.transport = transport
-        _stream_proxy_transport = transport
+        self._manager.set_transport(transport)
+        self._manager.set_protocol(self)
 
-    def datagram_received(self, data: bytes, addr):
-        target = _stream_proxy_target
-        if target["ip"] and target["port"] is not None:
-            self.transport.sendto(data, (target["ip"], target["port"]))
+    def datagram_received(self, data: bytes, addr: tuple) -> None:
+        ip, port = self._manager.get_target()
+        try:
+            self.transport.sendto(data, (ip, port))
+            self._manager.update_estimator_bytes_sent(len(data))
+        except (OSError, TypeError):
+            if not self._manager.invalid_logged():
+                print("[Daemon] Invalid proxy target, dropping datagrams")
+                self._manager.mark_invalid_logged()
 
-    def error_received(self, exc):
+    def error_received(self, exc: Exception) -> None:
         pass
 
-    def connection_lost(self, exc):
+    def connection_lost(self, exc: Exception | None) -> None:
         pass
 
 
-async def _stream_proxy_target_poll_loop() -> None:
+async def _stream_proxy_target_poll_loop(manager: StreamProxyManager) -> None:
     """Periodically reload stream-target.json and update proxy destination."""
     while True:
         cfg = _load_stream_target()
         if cfg and cfg.get("target_ip") and cfg.get("target_port") is not None:
-            _stream_proxy_target["ip"] = cfg["target_ip"]
-            _stream_proxy_target["port"] = int(cfg["target_port"])
+            manager.set_target(cfg["target_ip"], int(cfg["target_port"]))
         await asyncio.sleep(STREAM_TARGET_POLL_INTERVAL)
 
 
-async def _run_stream_proxy() -> None:
+async def _bandwidth_poll_loop(manager: StreamProxyManager) -> None:
+    """Periodically poll get_target_bps from the estimator and update target_bitrate."""
+    while True:
+        estimator = manager.get_estimator()
+        if estimator is not None:
+            manager.target_bitrate = estimator.get_target_bps()
+        await asyncio.sleep(BANDWIDTH_POLL_INTERVAL)
+
+
+async def _run_stream_proxy(manager: StreamProxyManager) -> None:
     """Start UDP proxy on STREAM_PROXY_PORT. Only for edge daemons."""
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
-        lambda: StreamProxyProtocol(),
+        lambda: StreamProxyProtocol(manager),
         local_addr=("0.0.0.0", STREAM_PROXY_PORT),
     )
     print(f"[Daemon] Stream proxy listening on 0.0.0.0:{STREAM_PROXY_PORT} (target from stream-target.json)")
@@ -228,12 +304,22 @@ async def lifespan(app: FastAPI):
 
     poll_task = None
     proxy_task = None
+    bandwidth_task = None
+    stream_proxy_manager = StreamProxyManager()
     if DEVICE_ID.startswith("edge-"):
-        poll_task = asyncio.create_task(_stream_proxy_target_poll_loop())
-        proxy_task = asyncio.create_task(_run_stream_proxy())
+        stream_proxy_manager.set_estimator(SentRateBackend())
+        poll_task = asyncio.create_task(_stream_proxy_target_poll_loop(stream_proxy_manager))
+        proxy_task = asyncio.create_task(_run_stream_proxy(stream_proxy_manager))
+        bandwidth_task = asyncio.create_task(_bandwidth_poll_loop(stream_proxy_manager))
 
     yield
 
+    if bandwidth_task:
+        bandwidth_task.cancel()
+        try:
+            await bandwidth_task
+        except asyncio.CancelledError:
+            pass
     if poll_task:
         poll_task.cancel()
         try:
@@ -246,8 +332,7 @@ async def lifespan(app: FastAPI):
             await proxy_task
         except asyncio.CancelledError:
             pass
-        if _stream_proxy_transport:
-            _stream_proxy_transport.close()
+        stream_proxy_manager.close()
     await _deregister_with_retries()
 
 

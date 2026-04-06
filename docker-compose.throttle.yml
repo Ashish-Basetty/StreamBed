@@ -1,0 +1,26 @@
+# StreamBed with throttle proxy for dynamic interleaving tests.
+# Extends main compose: adds throttle-proxy between daemon and server.
+# Run: docker compose -f docker-compose.yml -f docker-compose.throttle.yml up -d
+
+version: "3.9"
+
+services:
+  daemon-edge1:
+    environment:
+      - VIDEO_SOURCE=/app/OnboardingLoop.mp4
+
+  throttle-proxy:
+    build:
+      context: .
+      dockerfile: tests/throttle_proxy/Dockerfile
+    container_name: streambed-throttle-proxy
+    ports:
+      - "9010:9010/udp"
+    environment:
+      - BIND_HOST=0.0.0.0
+      - BIND_PORT=9010
+      - TARGET_HOST=server-001
+      - TARGET_PORT=9000
+      - THROTTLE_RATE_BPS=50000
+    networks:
+      - streambed-net

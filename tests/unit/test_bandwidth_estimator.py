@@ -97,13 +97,13 @@ def test_composite_forwards_callbacks():
 
 def test_server_feedback_returns_default_before_update():
     """ServerFeedbackBackend returns default_bps before any update."""
-    backend = ServerFeedbackBackend(feedback_url="http://localhost", default_bps=300_000)
+    backend = ServerFeedbackBackend(default_bps=300_000)
     assert backend.get_target_bps() == 300_000
 
 
 def test_server_feedback_updates_from_response():
-    """ServerFeedbackBackend updates target via update_from_response."""
-    backend = ServerFeedbackBackend(feedback_url="http://localhost", default_bps=100_000)
+    """ServerFeedbackBackend updates target via update_from_response (UDP push)."""
+    backend = ServerFeedbackBackend(default_bps=100_000)
     assert backend.get_target_bps() == 100_000
 
     backend.update_from_response({"received_bps": 500_000})

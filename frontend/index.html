@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StreamBed Controller</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #222; }
+
+    header {
+      background: #1a1a2e;
+      color: #fff;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    header h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: 0.5px; }
+
+    nav { display: flex; gap: 4px; }
+    nav button {
+      background: transparent;
+      border: none;
+      color: #aaa;
+      padding: 6px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    nav button.active { background: #fff2; color: #fff; }
+    nav button:hover:not(.active) { color: #ddd; }
+
+    .refresh-info { margin-left: auto; font-size: 0.8rem; color: #888; }
+
+    main { padding: 24px; max-width: 1600px; margin: 0 auto; }
+
+    .cluster-card {
+      background: #fff;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      overflow: hidden;
+    }
+    .cluster-header {
+      background: #eef;
+      padding: 10px 16px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      border-bottom: 1px solid #e0e0f0;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 16px; text-align: left; font-size: 0.875rem; }
+    td:first-child, th:first-child { min-width: 160px; }
+    th { background: #fafafa; color: #555; font-weight: 600; border-bottom: 1px solid #eee; }
+    tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+    .badge-active       { background: #d4edda; color: #155724; }
+    .badge-unresponsive { background: #f8d7da; color: #721c24; }
+    .badge-failure      { background: #fff3cd; color: #856404; }
+    .badge-unknown      { background: #e2e3e5; color: #383d41; }
+
+.btn {
+      padding: 8px 18px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+    .btn-primary { background: #4a6cf7; color: #fff; }
+    .btn-primary:hover { background: #3a5ce4; }
+    .btn-danger  { background: #dc3545; color: #fff; }
+    .btn-danger:hover  { background: #c82333; }
+    .btn-sm { padding: 4px 12px; font-size: 0.8rem; }
+    .btn-row { display: flex; gap: 8px; margin-top: 6px; }
+
+    .toast {
+      position: fixed; bottom: 24px; right: 24px;
+      padding: 10px 18px;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      color: #fff;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      z-index: 9999;
+    }
+    .toast.show { opacity: 1; }
+    .toast.ok  { background: #28a745; }
+    .toast.err { background: #dc3545; }
+
+    .section-actions { margin-bottom: 16px; display: flex; align-items: center; gap: 12px; }
+    .section-actions span { font-size: 0.82rem; color: #888; }
+    .model-input { width: 220px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.85rem; }
+    .port-input  { width: 80px;  padding: 4px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.85rem; }
+    .empty { color: #999; font-size: 0.875rem; padding: 16px; }
+  </style>
+</head>
+<body x-data="app()" x-init="init()">
+
+<header>
+  <h1>StreamBed Controller</h1>
+  <nav>
+    <button :class="{ active: tab === 'status' }" @click="tab = 'status'">Devices</button>
+<button :class="{ active: tab === 'routing' }" @click="tab = 'routing'">Routing</button>
+  </nav>
+  <span class="refresh-info" x-text="lastRefresh"></span>
+</header>
+
+<main>
+
+  <!-- DEVICES TAB (status + model versions unified) -->
+  <div x-show="tab === 'status'">
+    <div class="section-actions">
+      <button class="btn btn-primary btn-sm" @click="loadStatus()">Refresh</button>
+      <span>Auto-refresh: 10s</span>
+    </div>
+
+    <template x-if="error">
+      <p class="empty" x-text="'Error: ' + error"></p>
+    </template>
+
+    <template x-if="!error && clusters.length === 0">
+      <p class="empty">No devices found. Are any devices registered?</p>
+    </template>
+
+    <template x-for="cluster in clusters" :key="cluster.name">
+      <div class="cluster-card">
+        <div class="cluster-header">
+          Cluster: <span x-text="cluster.name"></span>
+          &nbsp;<small style="color:#888;font-weight:400">
+            (<span x-text="cluster.devices.length"></span>
+            <span x-text="cluster.devices.length === 1 ? 'device' : 'devices'"></span>)
+          </small>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Device ID</th><th>Status</th><th>Current Model</th>
+              <th>Last Heartbeat</th><th>Deploy New Image</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="d in cluster.devices" :key="d.device_id">
+              <tr>
+                <td x-text="d.device_id"></td>
+                <td><span class="badge" :class="badgeClass(d.status)" x-text="d.status || 'Unknown'"></span></td>
+                <td x-text="d.current_model || '—'"></td>
+                <td x-text="fmtTime(d.last_heartbeat)"></td>
+                <td>
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <input class="model-input" x-model="d._newImage" placeholder="user/repo:tag" />
+                    <input class="port-input" x-model="d._hostPort" placeholder="port" type="number" />
+                  </div>
+                </td>
+                <td>
+                  <div style="display:flex;gap:6px">
+                    <button class="btn btn-primary btn-sm" @click="deployFromRow(d)">Deploy</button>
+                    <button class="btn btn-danger btn-sm" @click="removeFromRow(d)">Remove</button>
+                  </div>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </template>
+  </div>
+
+  <!-- ROUTING TAB -->
+  <div x-show="tab === 'routing'">
+    <div class="section-actions">
+      <button class="btn btn-primary btn-sm" @click="loadRouting()">Refresh</button>
+    </div>
+
+    <template x-if="routing.length === 0">
+      <p class="empty">No routing entries found.</p>
+    </template>
+
+    <div class="cluster-card" x-show="routing.length > 0">
+      <table>
+        <thead>
+          <tr>
+            <th>Source Cluster</th>
+            <th>Edge Device</th>
+            <th>&#8594;</th>
+            <th>Target Cluster</th>
+            <th>Target Server</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="r in routing" :key="r.source_cluster + '/' + r.source_device">
+            <tr>
+              <td x-text="r.source_cluster"></td>
+              <td x-text="r.source_device"></td>
+              <td style="color:#999">&#8594;</td>
+              <td x-text="r.target_cluster"></td>
+              <td x-text="r.target_device"></td>
+              <td x-text="fmtTime(r.updated_at)"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+
+</main>
+
+<!-- Toast -->
+<div class="toast" :class="{ show: toast.visible, ok: toast.ok, err: !toast.ok }" x-text="toast.msg"></div>
+
+<script>
+  function app() {
+    return {
+      API: 'http://localhost:8080',
+      tab: 'status',
+      allStatus: [],
+      clusters: [],
+      routing: [],
+      error: null,
+      lastRefresh: '',
+      toast: { visible: false, msg: '', ok: true },
+
+      async init() {
+        await this.loadStatus();
+        await this.loadRouting();
+        setInterval(() => this.loadStatus(), 10000);
+        setInterval(() => this.loadRouting(), 10000);
+      },
+
+      async loadStatus() {
+        this.error = null;
+        try {
+          const statusRes = await fetch(`${this.API}/status`);
+          if (!statusRes.ok) throw new Error(await statusRes.text());
+          const statusData = await statusRes.json();
+          const statusList = statusData.status || [];
+
+          // Build a status lookup keyed by "cluster/device_id"
+          const statusMap = {};
+          for (const s of statusList) {
+            statusMap[`${s.device_cluster}/${s.device_id}`] = s;
+          }
+
+          // Fetch registered devices for each cluster found in status
+          const clusterNames = [...new Set(statusList.map(s => s.device_cluster))];
+          const deviceFetches = await Promise.all(
+            clusterNames.map(c =>
+              fetch(`${this.API}/devices?device_cluster=${encodeURIComponent(c)}`)
+                .then(r => r.json()).then(d => d.devices || [])
+            )
+          );
+          const allDevices = deviceFetches.flat();
+
+          // Merge: start from registered devices, overlay status info
+          this.allStatus = allDevices.map(d => {
+            const key = `${d.device_cluster}/${d.device_id}`;
+            const s = statusMap[key] || {};
+            return { ...d, current_model: s.current_model || null, status: s.status || null, last_heartbeat: s.last_heartbeat || null, _newImage: '', _hostPort: '' };
+          });
+
+          this.clusters = this.groupByCluster(this.allStatus);
+          this.lastRefresh = 'Last updated: ' + new Date().toLocaleTimeString();
+        } catch (e) {
+          this.error = e.message;
+        }
+      },
+
+      async loadRouting() {
+        try {
+          const res = await fetch(`${this.API}/routing`);
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          this.routing = data.routing || [];
+        } catch (e) {
+          console.error('Failed to load routing:', e.message);
+        }
+      },
+
+      groupByCluster(devices) {
+        const map = {};
+        for (const d of devices) {
+          (map[d.device_cluster] ??= []).push(d);
+        }
+        return Object.entries(map).map(([name, devs]) => ({ name, devices: devs }));
+      },
+
+      badgeClass(status) {
+        if (!status) return 'badge-unknown';
+        const s = status.toLowerCase();
+        if (s === 'active') return 'badge-active';
+        if (s === 'unresponsive') return 'badge-unresponsive';
+        if (s.includes('fail')) return 'badge-failure';
+        return 'badge-unknown';
+      },
+
+      fmtTime(ts) {
+        if (!ts) return '—';
+        const d = new Date(ts.replace(' ', 'T') + 'Z');
+        return isNaN(d) ? ts : d.toLocaleTimeString();
+      },
+
+      showToast(msg, ok = true) {
+        this.toast = { visible: true, msg, ok };
+        setTimeout(() => this.toast.visible = false, 3000);
+      },
+
+      async callDeploy(cluster, device, image, hostPort) {
+        const body = { device_cluster: cluster, device_id: device, image };
+        if (hostPort) body.host_port = parseInt(hostPort);
+        const res = await fetch(`${this.API}/deploy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || res.statusText);
+        return data;
+      },
+
+      async deployFromRow(d) {
+        const image = (d._newImage || '').trim();
+        if (!image) { this.showToast('Enter a Docker image first.', false); return; }
+        try {
+          await this.callDeploy(d.device_cluster, d.device_id, image, d._hostPort || null);
+          this.showToast(`Deployed ${image} to ${d.device_id}`);
+          d._newImage = '';
+          d._hostPort = '';
+          setTimeout(() => this.loadStatus(), 1500);
+        } catch (e) {
+          this.showToast(`Deploy failed: ${e.message}`, false);
+        }
+      },
+
+      async removeFromRow(d) {
+        if (!confirm(`Remove container on ${d.device_cluster}/${d.device_id}?`)) return;
+        try {
+          const res = await fetch(`${this.API}/delete`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ device_cluster: d.device_cluster, device_id: d.device_id }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || res.statusText);
+          this.showToast(`Container removed from ${d.device_id}`);
+          setTimeout(() => this.loadStatus(), 1500);
+        } catch (e) {
+          this.showToast(`Remove failed: ${e.message}`, false);
+        }
+      },
+    }
+  }
+</script>
+</body>
+</html>

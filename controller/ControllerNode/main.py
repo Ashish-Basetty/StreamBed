@@ -5,6 +5,7 @@ import logging
 import os
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from db import get_connection, init_db, register_device, update_heartbeat
@@ -84,27 +85,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="StreamBed Controller Node", lifespan=lifespan)
 
-# Example configuration data; replace with real config logic as needed
-def get_device_config(device_cluster: str, device_id: str) -> dict:
-    # TODO: Fetch real config from DB or file if needed
-    return {
-        "device_cluster": device_cluster,
-        "device_id": device_id,
-        "config": {
-            "heartbeat_interval": 5,
-            "model_version": "1.0.0",
-        }
-    }
-
-@app.get("/config")
-def get_config(device_cluster: str, device_id: str) -> dict:
-    """Return configuration for a device.
-    edge devices poll this to get their config (e.g. heartbeat interval, model version)."""
-    if not device_cluster or not device_id:
-        raise HTTPException(status_code=400, detail="device_cluster and device_id are required")
-    config = get_device_config(device_cluster, device_id)
-    return config
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class HeartbeatRequest(BaseModel):
     device_cluster: str
@@ -217,6 +203,25 @@ def receive_heartbeat(body: HeartbeatRequest) -> dict:
         return {"ok": True}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/routing")
+def list_routing(device_cluster: str | None = None) -> dict:
+    """List all routing table entries, optionally filtered by source cluster."""
+    conn = get_connection()
+    try:
+        if device_cluster:
+            rows = conn.execute(
+                "SELECT source_cluster, source_device, target_cluster, target_device, updated_at FROM routing WHERE source_cluster = ?",
+                (device_cluster,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT source_cluster, source_device, target_cluster, target_device, updated_at FROM routing"
+            ).fetchall()
+        return {"routing": [dict(row) for row in rows]}
+    finally:
+        conn.close()
 
 
 @app.get("/status")

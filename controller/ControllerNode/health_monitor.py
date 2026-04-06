@@ -38,7 +38,7 @@ class HealthMonitor:
 
     def __init__(
         self,
-        heartbeat_timeout_secs: int = 30,
+        heartbeat_timeout_secs: int,
         check_interval_secs: int = 5,
         controller_url: Optional[str] = None,
     ):
@@ -307,7 +307,7 @@ class HealthMonitor:
 
 
 async def create_and_start_monitor(
-    heartbeat_timeout_secs: int = 30,
+    heartbeat_timeout_secs: int = 90,
     check_interval_secs: int = 5,
     controller_url: Optional[str] = None,
 ) -> HealthMonitor:

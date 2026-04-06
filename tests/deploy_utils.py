@@ -3,6 +3,7 @@ Deploy and delete inference containers via the controller API.
 Used by integration tests to bring up the full stack (controller + daemons + edge/server containers).
 """
 import logging
+from typing import List, Optional
 import subprocess
 import time
 
@@ -44,9 +45,10 @@ def _wait_for_controller(controller_url: str) -> None:
     raise RuntimeError(f"Controller at {controller_url} not ready after {WAIT_RETRIES} attempts")
 
 
-def _wait_for_daemons() -> None:
+def _wait_for_daemons(daemon_ports: Optional[List[int]] = None) -> None:
     """Wait for daemons to be reachable (they register with controller on startup)."""
-    daemon_ports = [9090, 9091, 9092, 9093, 9094]
+    if daemon_ports is None:
+        daemon_ports = [9090, 9091, 9092, 9093, 9094]
     for i in range(WAIT_RETRIES):
         ready = 0
         for port in daemon_ports:

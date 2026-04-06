@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from shared.inference.mobilenet import MobileNetV2Model
 from shared.storage.frame_store import FrameStore
 from shared.storage.ttl_manager import TTLManager
 from shared.api.retrieval import create_retrieval_router
-from shared.interfaces.stream_interface import StreamBedUDPReceiver
+from shared.interfaces.stream_interface import StreamBedUDPServerReceiver
 from server_config import (
     API_HOST,
     API_PORT,
@@ -34,7 +35,8 @@ from server_config import (
 model = MobileNetV2Model(device=MODEL_DEVICE)
 store = FrameStore(base_dir=STORAGE_DIR)
 ttl_mgr = TTLManager(storage_path=STORAGE_DIR, max_ttl=TTL_MAX, min_ttl=TTL_MIN)
-receiver = StreamBedUDPReceiver()
+
+receiver = StreamBedUDPServerReceiver()
 
 
 async def stream_receive_loop():
@@ -118,6 +120,24 @@ async def stream_target_poll_loop():
         await asyncio.sleep(30)
 
 
+async def _feedback_send_loop():
+    """Push received_bps to stream source via UDP every 2 seconds."""
+    while True:
+        await asyncio.sleep(2.0)
+        addr = receiver.stream_source_addr
+        if addr is None:
+            continue
+        now = time.monotonic()
+        cutoff = now - 2.0
+        total_bits = sum(n * 8 for t, n in receiver.stream_received if t >= cutoff)
+        received_bps = total_bits / 2.0
+        payload = json.dumps({"received_bps": received_bps}).encode("utf-8")
+        try:
+            receiver.send_datagram(payload, addr)
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("[Server] Loading model...")
@@ -128,18 +148,23 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(ttl_cleanup_loop())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
     stream_target_task = asyncio.create_task(stream_target_poll_loop())
+    feedback_task = asyncio.create_task(_feedback_send_loop())
 
     yield
 
     receive_task.cancel()
+    feedback_task.cancel()
     cleanup_task.cancel()
     heartbeat_task.cancel()
     stream_target_task.cancel()
+    try:
+        await feedback_task
+    except asyncio.CancelledError:
+        pass
     await receiver.stop()
 
 
 app = FastAPI(title="StreamBed Server", lifespan=lifespan)
 app.include_router(create_retrieval_router(store))
-
 if __name__ == "__main__":
     uvicorn.run(app, host=API_HOST, port=API_PORT)

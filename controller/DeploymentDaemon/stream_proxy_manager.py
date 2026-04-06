@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 
-from shared.bandwidth import SentRateBackend
+from shared.bandwidth import BandwidthEstimator
 from shared.stream_chunks import make_chunks
 
 from daemon_config import MAX_VIDEO_FPS
@@ -29,16 +29,16 @@ class StreamProxyManager:
         self._target: dict[str, str | int | None] = {"ip": None, "port": None}
         self._udp_transport: asyncio.DatagramTransport | None = None
         self._print_invalid_dest = False
-        self._estimator: SentRateBackend | None = None
+        self._estimator: BandwidthEstimator | None = None
         self._target_frame_interval: float = 1.0 / MAX_VIDEO_FPS
         self._last_video_send_time: float = 0.0
         self._frame_size_alpha: float = 0.5
         self._avg_frame_size_bytes: float = 50_000
 
-    def set_estimator(self, estimator: SentRateBackend) -> None:
+    def set_estimator(self, estimator: BandwidthEstimator) -> None:
         self._estimator = estimator
 
-    def get_estimator(self) -> SentRateBackend | None:
+    def get_estimator(self) -> BandwidthEstimator | None:
         return self._estimator
 
     def set_udp_transport(self, transport: asyncio.DatagramTransport) -> None:

@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir torch torchvision --index-url https://download.py
 
 COPY shared/ /app/shared/
 COPY edge/ /app/
+COPY OnboardingLoop.mp4 /app/OnboardingLoop.mp4
 
 EXPOSE 8000
 

@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+from typing import Callable
 
 import docker
 import httpx
@@ -10,7 +11,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
-from shared.bandwidth import SentRateBackend
+from shared.bandwidth import CompositeBackend, SentRateBackend, ServerFeedbackBackend
 from shared.utils import _deployment_hash, _get_docker, _get_network
 
 from daemon_config import (
@@ -122,11 +123,14 @@ async def _bandwidth_poll_loop(manager: StreamProxyManager) -> None:
         await asyncio.sleep(BANDWIDTH_POLL_INTERVAL)
 
 
-async def _run_stream_tcp_server(manager: StreamProxyManager) -> None:
+async def _run_stream_tcp_server(
+    manager: StreamProxyManager,
+    on_feedback_received: Callable[[dict], None] | None = None,
+) -> None:
     """Start TCP server for edge connections and UDP transport for forwarding. Edge daemons only."""
     loop = asyncio.get_running_loop()
     udp_transport, _ = await loop.create_datagram_endpoint(
-        lambda: _UDPSendOnlyProtocol(),
+        lambda: _UDPSendOnlyProtocol(on_feedback_received=on_feedback_received),
         local_addr=("0.0.0.0", 0),
     )
     manager.set_udp_transport(udp_transport)
@@ -148,7 +152,7 @@ async def _register_with_retries() -> None:
         "port": DAEMON_PORT
     }
     last_err: Exception | None = None
-    for attempt in range(_REGISTER_RETRIES):
+    for attempt in range(REGISTER_RETRIES):
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(url, json=payload)
@@ -156,8 +160,8 @@ async def _register_with_retries() -> None:
                 return
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             last_err = e
-            if attempt < _REGISTER_RETRIES - 1:
-                await asyncio.sleep(_REGISTER_RETRY_DELAY)
+            if attempt < REGISTER_RETRIES - 1:
+                await asyncio.sleep(REGISTER_RETRY_DELAY)
     raise last_err
 
 
@@ -168,16 +172,25 @@ async def _deregister_with_retries() -> None:
         "device_id": DEVICE_ID
     }
     last_err: Exception | None = None
-    for attempt in range(_REGISTER_RETRIES):
+    for attempt in range(REGISTER_RETRIES):
         try:
             async with httpx.AsyncClient() as client:
                 await client.delete(url, json=payload)
                 return
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             last_err = e
-            if attempt < _REGISTER_RETRIES - 1:
-                await asyncio.sleep(_REGISTER_RETRY_DELAY)
+            if attempt < REGISTER_RETRIES - 1:
+                await asyncio.sleep(REGISTER_RETRY_DELAY)
     raise last_err
+
+
+async def _cancel_task(task: asyncio.Task | None) -> None:
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 @asynccontextmanager
@@ -187,33 +200,25 @@ async def lifespan(app: FastAPI):
     poll_task = None
     proxy_task = None
     bandwidth_task = None
+    server_feedback = None
     stream_proxy_manager = StreamProxyManager()
     if DEVICE_ID.startswith("edge-"):
-        stream_proxy_manager.set_estimator(SentRateBackend())
+        sent_rate = SentRateBackend()
+        server_feedback = ServerFeedbackBackend(default_bps=500_000)
+        stream_proxy_manager.set_estimator(CompositeBackend(sent_rate, server_feedback))
         poll_task = asyncio.create_task(_stream_proxy_target_poll_loop(stream_proxy_manager))
-        proxy_task = asyncio.create_task(_run_stream_tcp_server(stream_proxy_manager))
+        feedback_cb = server_feedback.update_from_response
+        proxy_task = asyncio.create_task(
+            _run_stream_tcp_server(stream_proxy_manager, on_feedback_received=feedback_cb)
+        )
         bandwidth_task = asyncio.create_task(_bandwidth_poll_loop(stream_proxy_manager))
 
     yield
 
-    if bandwidth_task:
-        bandwidth_task.cancel()
-        try:
-            await bandwidth_task
-        except asyncio.CancelledError:
-            pass
-    if poll_task:
-        poll_task.cancel()
-        try:
-            await poll_task
-        except asyncio.CancelledError:
-            pass
+    await _cancel_task(bandwidth_task)
+    await _cancel_task(poll_task)
+    await _cancel_task(proxy_task)
     if proxy_task:
-        proxy_task.cancel()
-        try:
-            await proxy_task
-        except asyncio.CancelledError:
-            pass
         stream_proxy_manager.close()
     await _deregister_with_retries()
 

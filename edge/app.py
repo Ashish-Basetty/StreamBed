@@ -4,6 +4,10 @@ import time
 import uuid
 
 import cv2
+import numpy as np
+
+# Suppress OpenCV VIDEOIO warnings when camera/video fails to open (e.g. in Docker)
+cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
 import httpx
 import uvicorn
 from contextlib import asynccontextmanager
@@ -32,8 +36,6 @@ from edge_config import (
     VIDEO_SOURCE,
 )
 
-POLL_INTERVAL = 30
-
 model = MobileNetV2Model(device=MODEL_DEVICE)
 store = FrameStore(base_dir=STORAGE_DIR)
 ttl_mgr = TTLManager(storage_path=STORAGE_DIR, max_ttl=TTL_MAX, min_ttl=TTL_MIN)
@@ -42,20 +44,27 @@ sender = StreamBedTCPSender()
 
 async def video_capture_loop():
     """Continuously capture frames, run inference, store, and stream."""
-    source = int(VIDEO_SOURCE) if VIDEO_SOURCE.isdigit() else VIDEO_SOURCE
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
-        print(f"[Edge] Cannot open video source: {VIDEO_SOURCE}")
-        return
+    cap = None
+    if VIDEO_SOURCE.lower() in ("synthetic", "test"):
+        print("[Edge] Using synthetic frames (VIDEO_SOURCE=synthetic)")
+    else:
+        source = int(VIDEO_SOURCE) if VIDEO_SOURCE.isdigit() else VIDEO_SOURCE
+        cap = cv2.VideoCapture(source)
+        if not cap.isOpened():
+            print(f"[Edge] Cannot open video source {VIDEO_SOURCE}, using synthetic frames")
+            cap = None
 
     try:
         while True:
-            ret, frame = cap.read()
-            if not ret:
-                # End of video file — loop back to start
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                await asyncio.sleep(0.01)
-                continue
+            if cap is not None:
+                ret, frame = cap.read()
+                if not ret:
+                    # End of video file — loop back to start
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    await asyncio.sleep(0.01)
+                    continue
+            else:
+                frame = np.zeros((480, 640, 3), dtype=np.uint8)
 
             timestamp = time.time()
             frame_id = f"{DEVICE_ID}_{uuid.uuid4().hex[:12]}"
@@ -87,7 +96,8 @@ async def video_capture_loop():
             # ~30 fps cap
             await asyncio.sleep(0.033)
     finally:
-        cap.release()
+        if cap is not None:
+            cap.release()
 
 
 async def ttl_cleanup_loop():
@@ -141,19 +151,17 @@ async def lifespan(app: FastAPI):
     model.load()
     print("[Edge] Model loaded.")
 
-    # capture_task = asyncio.create_task(video_capture_loop())
     cleanup_task = asyncio.create_task(ttl_cleanup_loop())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
-    # config_task  = asyncio.create_task(config_poll_loop())
 
     await _connect_to_proxy_with_retry()
+    capture_task = asyncio.create_task(video_capture_loop())
 
     yield
 
-    # capture_task.cancel()
+    capture_task.cancel()
     cleanup_task.cancel()
     heartbeat_task.cancel()
-    # config_task.cancel()
     await sender.close()
 
 

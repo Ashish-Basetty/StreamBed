@@ -1,11 +1,13 @@
 from abc import ABC, abstractmethod
+from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import asyncio
 import json
 import struct
+import time
 import io
 import os
 
@@ -235,19 +237,36 @@ class StreamBedUDPSender(StreamSenderInterface):
 
 
 class StreamBedUDPReceiver(StreamReceiverInterface):
-    def __init__(self):
+    def __init__(
+        self,
+        on_bytes_received: Optional[Callable[[int], None]] = None,
+        on_datagram_received: Optional[Callable[[bytes, tuple], None]] = None,
+    ):
         self._transport = None
         self._protocol = None
         self._queue: Optional[asyncio.Queue] = None
         self._stopped = False
+        self._on_bytes_received = on_bytes_received
+        self._on_datagram_received = on_datagram_received
 
     class _RecvProtocol(StreamBedUDPProtocol):
-        def __init__(self, queue: asyncio.Queue):
+        def __init__(
+            self,
+            queue: asyncio.Queue,
+            on_bytes_received: Optional[Callable[[int], None]] = None,
+            on_datagram_received: Optional[Callable[[bytes, tuple], None]] = None,
+        ):
             super().__init__()
             self._queue = queue
             self._reassembly: dict = {}
+            self._on_bytes_received = on_bytes_received
+            self._on_datagram_received = on_datagram_received
 
         def datagram_received(self, data: bytes, addr):
+            if self._on_bytes_received:
+                self._on_bytes_received(len(data))
+            if self._on_datagram_received:
+                self._on_datagram_received(data, addr)
             try:
                 text = data.decode("utf-8")
                 msg = json.loads(text)
@@ -282,10 +301,17 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
         loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue()
         self._transport, self._protocol = await loop.create_datagram_endpoint(
-            lambda: StreamBedUDPReceiver._RecvProtocol(self._queue),
+            lambda: StreamBedUDPReceiver._RecvProtocol(
+                self._queue, self._on_bytes_received, self._on_datagram_received
+            ),
             local_addr=(host, port),
         )
         print(f"[UDPReceiver] listening on {host}:{port}")
+
+    def send_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
+        """Send a UDP packet (e.g. feedback to stream source)."""
+        if self._transport:
+            self._transport.sendto(data, addr)
 
     async def receive_stream(self) -> AsyncIterator[StreamFrame]:
         if self._queue is None:
@@ -304,3 +330,19 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
             while not self._queue.empty():
                 _ = self._queue.get_nowait()
             self._queue = None
+
+
+class StreamBedUDPServerReceiver(StreamBedUDPReceiver):
+    """
+    Server-side receiver that tracks bytes received and source addr for UDP feedback push.
+    Inherits from StreamBedUDPReceiver; adds stream_received and stream_source_addr fields.
+    """
+
+    def __init__(self):
+        self.stream_received: deque = deque(maxlen=5000)
+        self.stream_source_addr: tuple | None = None
+        super().__init__(on_datagram_received=self._on_datagram)
+
+    def _on_datagram(self, data: bytes, addr: tuple) -> None:
+        self.stream_received.append((time.monotonic(), len(data)))
+        self.stream_source_addr = addr

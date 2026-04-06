@@ -17,11 +17,13 @@ class DockerComposeManager:
     def __init__(
         self,
         compose_file: Union[str, Path] = "docker-compose.yml",
+        compose_files: Optional[List[Union[str, Path]]] = None,
         project_name: str = "streambed",
         project_root: Optional[Path] = None,
     ):
         self.project_root = Path(project_root) if project_root else _project_root()
         self.compose_file = self.project_root / compose_file if isinstance(compose_file, str) else compose_file
+        self.compose_files = compose_files
         self.project_name = project_name
 
     def up_services(
@@ -33,12 +35,15 @@ class DockerComposeManager:
         """Start docker-compose services.
         env: merged into subprocess environment.
         flags: e.g. {"force_recreate": True} adds --force-recreate."""
-        cmd = [
-            "docker", "compose",
-            "-f", str(self.compose_file),
-            "-p", self.project_name,
-            "up", "-d",
-        ]
+        files = self.compose_files
+        if files is None:
+            files = [self.compose_file]
+        else:
+            files = [self.project_root / f if isinstance(f, str) else f for f in files]
+        cmd = ["docker", "compose"]
+        for f in files:
+            cmd.extend(["-f", str(f)])
+        cmd.extend(["-p", self.project_name, "up", "-d"])
         if flags and flags.get("force_recreate"):
             cmd.append("--force-recreate")
         if services:
@@ -70,12 +75,15 @@ class DockerComposeManager:
 
     def start_service(self, service: str) -> subprocess.CompletedProcess:
         """Start a specific service."""
-        cmd = [
-            "docker", "compose",
-            "-f", str(self.compose_file),
-            "-p", self.project_name,
-            "start", service,
-        ]
+        files = self.compose_files
+        if files is None:
+            files = [self.compose_file]
+        else:
+            files = [self.project_root / f if isinstance(f, str) else f for f in files]
+        cmd = ["docker", "compose"]
+        for f in files:
+            cmd.extend(["-f", str(f)])
+        cmd.extend(["-p", self.project_name, "start", service])
         result = subprocess.run(cmd, cwd=str(self.project_root), capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"Failed to start service {service}: {result.stderr}")
@@ -93,12 +101,15 @@ class DockerComposeManager:
 
     def down_services(self) -> subprocess.CompletedProcess:
         """Tear down all services."""
-        cmd = [
-            "docker", "compose",
-            "-f", str(self.compose_file),
-            "-p", self.project_name,
-            "down",
-        ]
+        files = self.compose_files
+        if files is None:
+            files = [self.compose_file]
+        else:
+            files = [self.project_root / f if isinstance(f, str) else f for f in files]
+        cmd = ["docker", "compose"]
+        for f in files:
+            cmd.extend(["-f", str(f)])
+        cmd.extend(["-p", self.project_name, "down"])
         result = subprocess.run(cmd, cwd=str(self.project_root), capture_output=True, text=True)
         if result.returncode != 0:
             print(f"Warning: Failed to stop services: {result.stderr}")

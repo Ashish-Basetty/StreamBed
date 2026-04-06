@@ -16,7 +16,7 @@ services:
     volumes:
       - ./controller/data:/app/data
     environment:
-      - HEARTBEAT_TIMEOUT_SECS=90
+      - HEARTBEAT_TIMEOUT_SECS=30
     networks:
       - streambed-net
 

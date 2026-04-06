@@ -12,3 +12,4 @@ STREAM_LISTEN_PORT = int(os.getenv("STREAM_LISTEN_PORT", "9000"))
 TTL_MAX = float(os.getenv("TTL_MAX", "7200"))  # Server has more storage
 TTL_MIN = float(os.getenv("TTL_MIN", "60"))
 CLEANUP_INTERVAL = float(os.getenv("CLEANUP_INTERVAL", "120"))
+HEARTBEAT_INTERVAL = float(os.getenv("HEARTBEAT_INTERVAL", "20"))

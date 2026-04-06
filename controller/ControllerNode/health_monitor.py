@@ -51,7 +51,10 @@ class HealthMonitor:
         # Startup grace period
         self.start_time = datetime.utcnow()
         self.startup_grace = timedelta(seconds=20)
-        self._initial_stream_target_synced = False
+
+        # Stream target sync interval
+        self.stream_target_sync_interval = timedelta(seconds=30)
+        self._last_stream_target_sync: datetime | None = None
 
         # Track previous device states
         self.prev_device_states: Dict[str, str] = {}
@@ -88,10 +91,11 @@ class HealthMonitor:
                 await asyncio.sleep(self.check_interval)
                 continue
 
-            # Sync initial stream-target from routing table (once) so edges have a target on deploy
-            if not self._initial_stream_target_synced:
+            # Periodically sync stream-targets from routing table
+            now = datetime.utcnow()
+            if self._last_stream_target_sync is None or now - self._last_stream_target_sync >= self.stream_target_sync_interval:
                 await self._sync_stream_targets_from_routing()
-                self._initial_stream_target_synced = True
+                self._last_stream_target_sync = now
 
             clusters = self._get_clusters()
 
@@ -307,7 +311,7 @@ class HealthMonitor:
 
 
 async def create_and_start_monitor(
-    heartbeat_timeout_secs: int = 90,
+    heartbeat_timeout_secs: int = 30,
     check_interval_secs: int = 5,
     controller_url: Optional[str] = None,
 ) -> HealthMonitor:

@@ -24,6 +24,7 @@ from server_config import (
     CONTROLLER_URL,
     DEVICE_CLUSTER,
     DEVICE_ID,
+    HEARTBEAT_INTERVAL,
     MODEL_DEVICE,
     STORAGE_DIR,
     STREAM_LISTEN_HOST,
@@ -94,7 +95,7 @@ async def heartbeat_loop():
                     )
             except Exception as e:
                 print(f"[Server] heartbeat failed: {e}")
-        await asyncio.sleep(30)
+        await asyncio.sleep(HEARTBEAT_INTERVAL)
 
 
 async def stream_target_poll_loop():

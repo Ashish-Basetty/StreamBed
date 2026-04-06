@@ -130,7 +130,77 @@ def register_device_endpoint(request: Request, body: RegisterRequest) -> dict:
     ip = body.ip or (request.client.host if request.client else "0.0.0.0")
     port = body.port
     register_device(body.device_cluster, body.device_id, ip, port)
+    if body.device_id.startswith("edge"):
+        _assign_edge_to_least_loaded_server(body.device_cluster, body.device_id)
+    elif body.device_id.startswith("server"):
+        _assign_unrouted_edges(body.device_cluster)
     return {"ok": True, "device_cluster": body.device_cluster, "device_id": body.device_id}
+
+
+def _assign_edge_to_least_loaded_server(cluster: str, edge_id: str) -> None:
+    """Assign a new edge to the server in the cluster with the fewest incoming routes."""
+    conn = get_connection()
+    try:
+        servers = [
+            r[0] for r in conn.execute(
+                "SELECT device_id FROM devices WHERE device_cluster=? AND device_id LIKE 'server%'",
+                (cluster,),
+            ).fetchall()
+        ]
+        if not servers:
+            return
+
+        # Count existing routes per server
+        load = {s: 0 for s in servers}
+        rows = conn.execute(
+            "SELECT target_device, COUNT(*) FROM routing WHERE source_cluster=? GROUP BY target_device",
+            (cluster,),
+        ).fetchall()
+        for target, count in rows:
+            if target in load:
+                load[target] = count
+
+        target_server = min(load, key=load.get)
+
+        conn.execute(
+            """INSERT INTO routing (source_cluster, source_device, target_cluster, target_device, updated_at)
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(source_cluster, source_device) DO UPDATE SET
+                   target_cluster=excluded.target_cluster,
+                   target_device=excluded.target_device,
+                   updated_at=CURRENT_TIMESTAMP""",
+            (cluster, edge_id, cluster, target_server),
+        )
+        conn.commit()
+        logger.info(f"[REGISTER] Routed {cluster}/{edge_id} -> {target_server} (load: {load})")
+    except Exception as e:
+        logger.error(f"[REGISTER] Error assigning route for {edge_id}: {e}")
+    finally:
+        conn.close()
+
+def _assign_unrouted_edges(cluster: str) -> None:
+    """When a server registers, assign any edges in the cluster that have no routing entry."""
+    conn = get_connection()
+    try:
+        edges = [
+            r[0] for r in conn.execute(
+                "SELECT device_id FROM devices WHERE device_cluster=? AND device_id LIKE 'edge%'",
+                (cluster,),
+            ).fetchall()
+        ]
+        routed = {
+            r[0] for r in conn.execute(
+                "SELECT source_device FROM routing WHERE source_cluster=?",
+                (cluster,),
+            ).fetchall()
+        }
+        unrouted = [e for e in edges if e not in routed]
+    finally:
+        conn.close()
+
+    for edge_id in unrouted:
+        _assign_edge_to_least_loaded_server(cluster, edge_id)
+
 
 @app.post("/deregister")
 def deregister_device_endpoint(request: Request, body: RegisterRequest) -> dict:

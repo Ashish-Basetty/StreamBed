@@ -35,13 +35,14 @@ THROTTLED_FRAME_THRESHOLD = 50
 @pytest.fixture(scope="module")
 def throttle_stack():
     """Bring up controller, daemon-edge1, daemon-server1, throttle-proxy."""
-    if _CONTROLLER_DB_PATH.exists():
-        _CONTROLLER_DB_PATH.unlink()
-
     manager = DockerComposeManager(
         compose_files=["docker-compose.yml", "docker-compose.throttle.yml"],
         project_name="streambed",
     )
+    manager.down_services()
+    if _CONTROLLER_DB_PATH.exists():
+        _CONTROLLER_DB_PATH.unlink()
+
     manager.up_services(
         services=["controller", "daemon-edge1", "daemon-server1", "throttle-proxy"],
     )

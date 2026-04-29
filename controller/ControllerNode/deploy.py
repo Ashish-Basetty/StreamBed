@@ -52,8 +52,10 @@ def deploy_to_device(
                 resp.raise_for_status()
                 data = resp.json()
                 if data.get("ok"):
-                    # Record successful deployment
-                    record_deployment(device_cluster, device_id, image, host_port, container_port)
+                    try:
+                        record_deployment(device_cluster, device_id, image, host_port, container_port)
+                    except Exception as e:
+                        raise DeployError(f"Deploy succeeded but failed to record: {e}") from e
                     return data
                 raise DeployError(data.get("error", "Daemon returned failure"))
         except httpx.HTTPStatusError as e:
@@ -93,7 +95,10 @@ def delete_container_from_device(
                 data = resp.json()
                 if data.get("ok"):
                     if not soft_delete:
-                        delete_deployment(device_cluster, device_id)
+                        try:
+                            delete_deployment(device_cluster, device_id)
+                        except Exception as e:
+                            raise DeployError(f"Delete succeeded but failed to record: {e}") from e
                     return data
                 raise DeployError(data.get("error", "Daemon returned failure"))
         except httpx.HTTPStatusError as e:

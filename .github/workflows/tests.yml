@@ -1,0 +1,55 @@
+name: Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: pytest -m unit -v
+
+  integration:
+    name: Docker Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create daemon-data directories
+        run: mkdir -p daemon-data/{edge1,edge2,edge3,server1,server2}/streambed
+
+      - name: Build images
+        run: docker compose build
+
+      - name: Run Docker integration tests
+        run: pytest -m integration_docker -v -s
+
+      - name: Dump controller logs on failure
+        if: failure()
+        run: docker logs streambed-controller || true

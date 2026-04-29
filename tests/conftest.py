@@ -11,6 +11,7 @@ import pytest
 from tests.deploy_utils import (
     _wait_for_controller,
     _wait_for_daemons,
+    _wait_for_devices_registered,
     delete_all_inference,
     delete_device,
     deploy_all_inference,
@@ -23,6 +24,8 @@ _TEST_FAILURE_LOGS_DIR = _PROJECT_ROOT / "tests" / "logs"
 # Local runs use controller/ControllerNode/data/controller.db
 _CONTROLLER_DB_PATH = _PROJECT_ROOT / "controller" / "data" / "controller.db"
 
+_ALL_DEVICE_IDS = ["server-001", "server-002", "edge-001", "edge-002", "edge-003"]
+
 
 @pytest.fixture(scope="session")
 def deployed_inference_stack():
@@ -30,14 +33,14 @@ def deployed_inference_stack():
     Session-scoped fixture: brings up controller + daemons, deploys all inference
     containers, yields for tests, then deletes inference and tears down compose.
     """
-    # Clear controller DB so we start with a clean slate (avoids stale deployment state)
-    if _CONTROLLER_DB_PATH.exists():
-        _CONTROLLER_DB_PATH.unlink()
-
     manager = DockerComposeManager(
         compose_file="docker-compose.yml",
         project_name="streambed",
     )
+    manager.down_services()
+    if _CONTROLLER_DB_PATH.exists():
+        _CONTROLLER_DB_PATH.unlink()
+
     manager.up_services()
     time.sleep(10)  # Allow controller and daemons to start
 
@@ -55,22 +58,29 @@ def deployment_stack():
     Module-scoped fixture: brings up controller + daemons only (no auto-deploy).
     For tests that manually deploy/delete via the controller API.
     """
-    if _CONTROLLER_DB_PATH.exists():
-        _CONTROLLER_DB_PATH.unlink()
-
     manager = DockerComposeManager(
         compose_file="docker-compose.yml",
         project_name="streambed",
     )
+    # Tear down any prior stack (e.g. left running by a session-scoped fixture)
+    # so the controller restarts and runs init_db() with a fresh schema.
+    manager.down_services()
+    if _CONTROLLER_DB_PATH.exists():
+        _CONTROLLER_DB_PATH.unlink()
+
     manager.up_services()
     time.sleep(10)
     _wait_for_controller("http://localhost:8080")
     _wait_for_daemons()
+    _wait_for_devices_registered(
+        "http://localhost:8080",
+        expected_ids=_ALL_DEVICE_IDS,
+        cluster="default",
+    )
 
     yield manager
 
-    # Clean up deployed containers before tearing down
-    for device_id in ("server-001", "edge-001"):
+    for device_id in _ALL_DEVICE_IDS:
         try:
             delete_device(device_id, controller_url="http://localhost:8080")
         except Exception:
@@ -87,7 +97,7 @@ def _save_controller_logs_on_failure(item, report):
     _TEST_FAILURE_LOGS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_name = item.name.replace("/", "_").replace("::", "_")
-    log_path = _TEST_FAILURE_LOGS_DIR / f"controller_{safe_name}_{timestamp}.log"
+    log_path = _TEST_FAILURE_LOGS_DIR / f"{timestamp}_controller_{safe_name}.log"
     try:
         result = subprocess.run(
             ["docker", "logs", "streambed-controller"],

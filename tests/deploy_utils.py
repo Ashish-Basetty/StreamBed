@@ -65,6 +65,30 @@ def _wait_for_daemons(daemon_ports: Optional[List[int]] = None) -> None:
     raise RuntimeError(f"Daemons not ready after {WAIT_RETRIES} attempts")
 
 
+def _wait_for_devices_registered(
+    controller_url: str,
+    expected_ids: List[str],
+    cluster: str,
+) -> None:
+    """Poll GET /devices until all expected device_ids are registered with the controller."""
+    base = controller_url.rstrip("/")
+    expected = set(expected_ids)
+    for _ in range(WAIT_RETRIES):
+        try:
+            with httpx.Client(timeout=5) as client:
+                resp = client.get(f"{base}/devices", params={"device_cluster": cluster})
+                if resp.status_code == 200:
+                    registered = {d["device_id"] for d in resp.json().get("devices", [])}
+                    if expected.issubset(registered):
+                        return
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            pass
+        time.sleep(WAIT_INTERVAL)
+    raise RuntimeError(
+        f"Not all devices registered after {WAIT_RETRIES} attempts; expected {expected}"
+    )
+
+
 def deploy_all_inference(controller_url: str = "http://localhost:8080") -> None:
     """
     Deploy all inference containers (edge + server) to all daemons via the controller.

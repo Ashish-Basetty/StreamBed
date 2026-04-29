@@ -27,6 +27,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS devices (
                 device_cluster TEXT NOT NULL,
                 device_id TEXT NOT NULL,
+                device_type TEXT NOT NULL CHECK(device_type IN ('edge', 'server')),
                 ip TEXT NOT NULL,
                 port INTEGER,
                 registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -58,6 +59,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS deployments (
                 device_cluster TEXT NOT NULL,
                 device_id TEXT NOT NULL,
+                device_type TEXT NOT NULL,
                 image TEXT NOT NULL,
                 host_port INTEGER,
                 container_port INTEGER,
@@ -76,22 +78,24 @@ def init_db() -> None:
 def register_device(
     device_cluster: str,
     device_id: str,
+    device_type: str,
     ip: str,
     port: int | None = None,
 ) -> None:
-    """Register or update a device in the registry."""
+    """Register or update a device in the registry. device_type must be 'edge' or 'server'."""
     conn = get_connection()
     try:
         conn.execute(
             """
-            INSERT INTO devices (device_cluster, device_id, ip, port, registered_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO devices (device_cluster, device_id, device_type, ip, port, registered_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(device_cluster, device_id) DO UPDATE SET
+                device_type = excluded.device_type,
                 ip = excluded.ip,
                 port = excluded.port,
                 registered_at = CURRENT_TIMESTAMP
             """,
-            (device_cluster, device_id, ip, port),
+            (device_cluster, device_id, device_type, ip, port),
         )
         conn.commit()
     finally:
@@ -231,6 +235,7 @@ def get_all_devices_in_cluster(
 def record_deployment(
     device_cluster: str,
     device_id: str,
+    device_type: str,
     image: str,
     host_port: int | None = None,
     container_port: int | None = None,
@@ -240,15 +245,15 @@ def record_deployment(
     try:
         conn.execute(
             """
-            INSERT INTO deployments (device_cluster, device_id, image, host_port, container_port, deployed_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO deployments (device_cluster, device_id, device_type, image, host_port, container_port, deployed_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(device_cluster, device_id) DO UPDATE SET
                 image = excluded.image,
                 host_port = excluded.host_port,
                 container_port = excluded.container_port,
                 deployed_at = CURRENT_TIMESTAMP
             """,
-            (device_cluster, device_id, image, host_port, container_port),
+            (device_cluster, device_id, device_type, image, host_port, container_port),
         )
         conn.commit()
     finally:
@@ -276,7 +281,7 @@ def get_last_deployment(
     conn = get_connection()
     try:
         row = conn.execute(
-            """SELECT device_cluster, device_id, image, host_port, container_port, deployed_at
+            """SELECT device_cluster, device_id, device_type, image, host_port, container_port, deployed_at
                FROM deployments WHERE device_cluster = ? AND device_id = ?
                ORDER BY deployed_at DESC LIMIT 1""",
             (device_cluster, device_id),
@@ -303,7 +308,7 @@ def get_cluster_deployments(device_cluster: str) -> dict[str, dict]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT device_cluster, device_id, image, host_port, container_port, deployed_at
+            """SELECT device_cluster, device_id, device_type, image, host_port, container_port, deployed_at
                FROM deployments WHERE device_cluster = ?
                ORDER BY device_id""",
             (device_cluster,),

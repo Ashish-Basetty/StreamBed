@@ -150,6 +150,7 @@ class HealthMonitor:
             deploy_to_device(
                 cluster,
                 device_id,
+                last["device_type"],
                 last["image"],
                 last.get("host_port"),
                 last.get("container_port"),

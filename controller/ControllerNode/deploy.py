@@ -18,6 +18,7 @@ def validate_device_id(device_id: str) -> None:
 def deploy_to_device(
     device_cluster: str,
     device_id: str,
+    device_type: str,
     image: str,
     host_port: int | None = None,
     container_port: int | None = None,
@@ -36,7 +37,7 @@ def deploy_to_device(
     ip, port = addr
 
     url = f"http://{ip}:{port}/deploy"
-    payload: dict = {"image": image}
+    payload: dict = {"image": image, "device_type": device_type}
     if host_port is not None:
         payload["host_port"] = host_port
     if container_port is not None:
@@ -53,7 +54,7 @@ def deploy_to_device(
                 data = resp.json()
                 if data.get("ok"):
                     try:
-                        record_deployment(device_cluster, device_id, image, host_port, container_port)
+                        record_deployment(device_cluster, device_id, device_type, image, host_port, container_port)
                     except Exception as e:
                         raise DeployError(f"Deploy succeeded but failed to record: {e}") from e
                     return data

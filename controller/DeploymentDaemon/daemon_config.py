@@ -7,6 +7,7 @@ from pathlib import Path
 DEVICE_ID = os.environ.get("DEVICE_ID", "")
 DEVICE_CLUSTER = os.environ.get("DEVICE_CLUSTER", "")
 CONTROLLER_URL = (os.environ.get("CONTROLLER_URL") or "").strip()
+DEVICE_TYPE = os.environ.get("DEVICE_TYPE")
 
 if not DEVICE_ID:
     raise ValueError("DEVICE_ID is not set")
@@ -14,6 +15,8 @@ if not DEVICE_CLUSTER:
     raise ValueError("DEVICE_CLUSTER is not set")
 if not CONTROLLER_URL:
     raise ValueError("CONTROLLER_URL is not set")
+if not DEVICE_TYPE:
+    raise ValueError("DEVICE_TYPE is not set")
 
 DAEMON_PORT = int(os.environ.get("DAEMON_PORT", "9090"))
 DAEMON_ADDRESS = os.environ.get("DAEMON_ADDRESS", platform.node())

@@ -40,6 +40,7 @@ services:
       - STREAMBED_MEMORY_LIMIT=6g
       - CONTROLLER_URL=http://controller:8080
       - DEVICE_ID=edge-001
+      - DEVICE_TYPE=edge
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-edge1
       - VIDEO_SOURCE=synthetic
@@ -67,6 +68,7 @@ services:
       - STREAMBED_MEMORY_LIMIT=6g
       - CONTROLLER_URL=http://controller:8080
       - DEVICE_ID=edge-002
+      - DEVICE_TYPE=edge
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-edge2
       - VIDEO_SOURCE=synthetic
@@ -94,6 +96,7 @@ services:
       - STREAMBED_MEMORY_LIMIT=6g
       - CONTROLLER_URL=http://controller:8080
       - DEVICE_ID=edge-003
+      - DEVICE_TYPE=edge
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-edge3
       - VIDEO_SOURCE=synthetic
@@ -121,6 +124,7 @@ services:
       - STREAMBED_MEMORY_LIMIT=6g
       - CONTROLLER_URL=http://controller:8080
       - DEVICE_ID=server-001
+      - DEVICE_TYPE=server
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-server1
     depends_on:
@@ -146,6 +150,7 @@ services:
       - STREAMBED_MEMORY_LIMIT=6g
       - CONTROLLER_URL=http://controller:8080
       - DEVICE_ID=server-002
+      - DEVICE_TYPE=server
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-server2
     depends_on:

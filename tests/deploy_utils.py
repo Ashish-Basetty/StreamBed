@@ -17,11 +17,11 @@ EDGE_IMAGE = "ashishbasetty/streambed-edge:latest"
 SERVER_IMAGE = "ashishbasetty/streambed-server:latest"
 
 DEVICES = [
-    {"device_id": "server-001", "host_port": 8001, "container_port": 8001, "image": SERVER_IMAGE},
-    {"device_id": "server-002", "host_port": 8004, "container_port": 8001, "image": SERVER_IMAGE},
-    {"device_id": "edge-001", "host_port": 8000, "container_port": 8000, "image": EDGE_IMAGE},
-    {"device_id": "edge-002", "host_port": 8002, "container_port": 8000, "image": EDGE_IMAGE},
-    {"device_id": "edge-003", "host_port": 8003, "container_port": 8000, "image": EDGE_IMAGE},
+    {"device_id": "server-001", "device_type": "server", "host_port": 8001, "container_port": 8001, "image": SERVER_IMAGE},
+    {"device_id": "server-002", "device_type": "server", "host_port": 8004, "container_port": 8001, "image": SERVER_IMAGE},
+    {"device_id": "edge-001", "device_type": "edge", "host_port": 8000, "container_port": 8000, "image": EDGE_IMAGE},
+    {"device_id": "edge-002", "device_type": "edge", "host_port": 8002, "container_port": 8000, "image": EDGE_IMAGE},
+    {"device_id": "edge-003", "device_type": "edge", "host_port": 8003, "container_port": 8000, "image": EDGE_IMAGE},
 ]
 
 CONTROLLER_TIMEOUT = 120  # Deploy can take a while (image pull)
@@ -104,6 +104,7 @@ def deploy_all_inference(controller_url: str = "http://localhost:8080") -> None:
             payload = {
                 "device_cluster": DEVICE_CLUSTER,
                 "device_id": dev["device_id"],
+                "device_type": dev["device_type"],
                 "image": dev["image"],
                 "host_port": dev["host_port"],
                 "container_port": dev["container_port"],
@@ -138,6 +139,7 @@ def deploy_device(
     payload = {
         "device_cluster": DEVICE_CLUSTER,
         "device_id": dev["device_id"],
+        "device_type": dev["device_type"],
         "image": dev["image"],
         "host_port": dev["host_port"],
         "container_port": dev["container_port"],

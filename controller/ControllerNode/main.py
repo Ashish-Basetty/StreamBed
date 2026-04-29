@@ -36,9 +36,12 @@ async def lifespan(app: FastAPI):
         clusters = conn.execute("SELECT DISTINCT device_cluster FROM devices").fetchall()
         for row in clusters:
             cluster = row[0]
-            devices = conn.execute("SELECT device_id FROM devices WHERE device_cluster=?", (cluster,)).fetchall()
-            servers = [d[0] for d in devices if d[0].startswith('server')]
-            edges = [d[0] for d in devices if d[0].startswith('edge')]
+            devices = conn.execute(
+                "SELECT device_id, device_type FROM devices WHERE device_cluster=?",
+                (cluster,),
+            ).fetchall()
+            servers = [d[0] for d in devices if d[1] == 'server']
+            edges = [d[0] for d in devices if d[1] == 'edge']
             if not servers:
                 continue
             target_server = servers[0]
@@ -102,6 +105,7 @@ class HeartbeatRequest(BaseModel):
 class RegisterRequest(BaseModel):
     device_cluster: str
     device_id: str
+    device_type: str  # "edge" or "server"
     ip: str | None = None  # override client address (e.g. hostname for testing)
     port: int | None = None  # override daemon port (default 9090)
 
@@ -109,6 +113,7 @@ class RegisterRequest(BaseModel):
 class DeployRequest(BaseModel):
     device_cluster: str
     device_id: str
+    device_type: str  # "edge" or "server"
     image: str  # DockerHub image, e.g. "user/repo:tag"
     host_port: int | None = None  # defaults to daemon's STREAMBED_HOST_PORT
     container_port: int | None = None  # defaults to daemon's STREAMBED_CONTAINER_PORT
@@ -129,10 +134,10 @@ def register_device_endpoint(request: Request, body: RegisterRequest) -> dict:
     """Register a device. IP/port from body if provided, else request client address."""
     ip = body.ip or (request.client.host if request.client else "0.0.0.0")
     port = body.port
-    register_device(body.device_cluster, body.device_id, ip, port)
-    if body.device_id.startswith("edge"):
+    register_device(body.device_cluster, body.device_id, body.device_type, ip, port)
+    if body.device_type == "edge":
         _assign_edge_to_least_loaded_server(body.device_cluster, body.device_id)
-    elif body.device_id.startswith("server"):
+    elif body.device_type == "server":
         _assign_unrouted_edges(body.device_cluster)
     return {"ok": True, "device_cluster": body.device_cluster, "device_id": body.device_id}
 
@@ -143,7 +148,7 @@ def _assign_edge_to_least_loaded_server(cluster: str, edge_id: str) -> None:
     try:
         servers = [
             r[0] for r in conn.execute(
-                "SELECT device_id FROM devices WHERE device_cluster=? AND device_id LIKE 'server%'",
+                "SELECT device_id FROM devices WHERE device_cluster=? AND device_type='server'",
                 (cluster,),
             ).fetchall()
         ]
@@ -184,7 +189,7 @@ def _assign_unrouted_edges(cluster: str) -> None:
     try:
         edges = [
             r[0] for r in conn.execute(
-                "SELECT device_id FROM devices WHERE device_cluster=? AND device_id LIKE 'edge%'",
+                "SELECT device_id FROM devices WHERE device_cluster=? AND device_type='edge'",
                 (cluster,),
             ).fetchall()
         ]
@@ -234,6 +239,7 @@ def deploy_container(body: DeployRequest) -> dict:
         result = deploy_to_device(
             body.device_cluster,
             body.device_id,
+            body.device_type,
             body.image,
             body.host_port,
             body.container_port,

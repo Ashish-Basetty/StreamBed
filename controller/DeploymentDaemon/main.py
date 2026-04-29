@@ -23,6 +23,7 @@ from daemon_config import (
     DEFAULT_HOST_PORT,
     DEVICE_CLUSTER,
     DEVICE_ID,
+    DEVICE_TYPE,
     MAX_FRAME_PAYLOAD_BYTES,
     STATE_PATH,
     STREAM_PROXY_HOST,
@@ -148,6 +149,7 @@ async def _register_with_retries() -> None:
     payload = {
         "device_cluster": DEVICE_CLUSTER,
         "device_id": DEVICE_ID,
+        "device_type": DEVICE_TYPE,
         "ip": DAEMON_ADDRESS,
         "port": DAEMON_PORT
     }
@@ -202,7 +204,7 @@ async def lifespan(app: FastAPI):
     bandwidth_task = None
     server_feedback = None
     stream_proxy_manager = StreamProxyManager()
-    if DEVICE_ID.startswith("edge-"):
+    if DEVICE_TYPE == "edge":
         sent_rate = SentRateBackend()
         server_feedback = ServerFeedbackBackend(default_bps=500_000)
         stream_proxy_manager.set_estimator(CompositeBackend(sent_rate, server_feedback))
@@ -278,7 +280,7 @@ def deploy(body: DeployRequest) -> dict:
         if network:
             run_kwargs["network"] = network
             # Server containers get network alias = device_id so proxy can reach them at server-001:9000
-            if DEVICE_ID.startswith("server-"):
+            if DEVICE_TYPE == "server":
                 run_kwargs["networking_config"] = client.api.create_networking_config({
                     network: client.api.create_endpoint_config(aliases=[DEVICE_ID])
                 })
@@ -290,7 +292,7 @@ def deploy(body: DeployRequest) -> dict:
         }
         if VIDEO_SOURCE:
             container_env["VIDEO_SOURCE"] = VIDEO_SOURCE
-        if DEVICE_ID.startswith("edge-"):
+        if DEVICE_TYPE == "edge":
             container_env["STREAM_PROXY_HOST"] = STREAM_PROXY_HOST
             container_env["STREAM_PROXY_PORT"] = str(STREAM_PROXY_PORT)
         run_kwargs["environment"] = container_env

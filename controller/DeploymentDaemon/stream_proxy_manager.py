@@ -7,7 +7,11 @@ import time
 from shared.bandwidth import BandwidthEstimator
 from shared.stream_chunks import make_chunks
 
-from daemon_config import MAX_VIDEO_FPS
+from daemon_config import (
+    MAX_VIDEO_FPS,
+    SIDECAR_LOCAL_UDP_PORT,
+    STREAM_TRANSPORT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,21 +93,29 @@ class StreamProxyManager:
         self._target_frame_interval = max(calculated_frame_interval, 1.0 / MAX_VIDEO_FPS)
 
     def forward_frame(self, payload: bytes, frame_len: int, embedding_len: int) -> None:
-        """Decide whether to forward and send if so."""
+        """Decide whether to forward and send if so.
+
+        Under STREAM_TRANSPORT=quic, chunks are written to the local sidecar at
+        127.0.0.1:SIDECAR_LOCAL_UDP_PORT instead of directly to the peer.
+        """
         if frame_len > 0 and self.should_drop_video_frame():
-            return
-        ip, port = self.get_target()
-        if ip is None or port is None:
-            if not self.invalid_logged():
-                logger.warning("[Daemon] No stream target, dropping frame")
-                self.mark_invalid_logged()
             return
         transport = self.get_udp_transport()
         if transport is None:
             return
+        if STREAM_TRANSPORT == "quic":
+            dest = ("127.0.0.1", SIDECAR_LOCAL_UDP_PORT)
+        else:
+            ip, port = self.get_target()
+            if ip is None or port is None:
+                if not self.invalid_logged():
+                    logger.warning("[Daemon] No stream target, dropping frame")
+                    self.mark_invalid_logged()
+                return
+            dest = (ip, port)
         self.reset_invalid_logged()
         for chunk in make_chunks(payload):
-            transport.sendto(chunk, (ip, port))
+            transport.sendto(chunk, dest)
         self.update_estimator_bytes_sent(len(payload))
         self._avg_frame_size_bytes = (1 - self._frame_size_alpha) * self._avg_frame_size_bytes + self._frame_size_alpha * len(payload)
 

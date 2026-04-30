@@ -29,19 +29,18 @@ def make_stream_frame(timestamp, frame_id):
 async def _collect_frames(n, sender_fn):
     receiver = StreamBedUDPReceiver()
     await receiver.listen("127.0.0.1", 0)
-    port = receiver._transport.get_extra_info("socket").getsockname()[1]
-
-    received = []
-    queue = receiver._queue
+    port = receiver.get_local_port()
 
     sender = StreamBedUDPSender()
     await sender.connect("127.0.0.1", port)
     await sender_fn(sender)
-    await asyncio.sleep(0.2)
 
+    received = []
     for _ in range(n):
-        if not queue.empty():
-            received.append(queue.get_nowait())
+        frame = await receiver.recv_one(timeout=2.0)
+        if frame is None:
+            break
+        received.append(frame)
 
     await sender.close()
     await receiver.stop()

@@ -27,8 +27,7 @@ def make_frame(ts, src):
 async def _send_and_collect(n_frames, send_delay=0.0):
     receiver = StreamBedUDPReceiver()
     await receiver.listen("127.0.0.1", 0)
-    port = receiver._transport.get_extra_info("socket").getsockname()[1]
-    queue = receiver._queue
+    port = receiver.get_local_port()
 
     sender = StreamBedUDPSender()
     await sender.connect("127.0.0.1", port)
@@ -43,8 +42,11 @@ async def _send_and_collect(n_frames, send_delay=0.0):
     t_end = time.perf_counter()
 
     received = []
-    while not queue.empty():
-        received.append(queue.get_nowait())
+    while True:
+        frame = await receiver.recv_one(timeout=0.05)
+        if frame is None:
+            break
+        received.append(frame)
 
     await sender.close()
     await receiver.stop()

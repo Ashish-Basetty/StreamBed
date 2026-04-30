@@ -17,7 +17,6 @@ import numpy as np
 
 from shared.stream_chunks import CHUNK_MAGIC, make_chunks as _make_chunks_impl
 
-# todo: change to <1400 to avoid IP-level fragmentation, but need to handle more chunks per frame
 JPEG_MAGIC = b'JPEG'
 
 
@@ -319,6 +318,27 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
         while not self._stopped:
             frame = await self._queue.get()
             yield frame
+
+    async def recv_one(self, timeout: float | None = None) -> StreamFrame | None:
+        """Public dequeue for tests and adapters; returns None on timeout."""
+        if self._queue is None:
+            raise RuntimeError("receiver.listen must be called before recv_one")
+        try:
+            if timeout is None:
+                return await self._queue.get()
+            return await asyncio.wait_for(self._queue.get(), timeout)
+        except asyncio.TimeoutError:
+            return None
+
+    def get_local_port(self) -> int | None:
+        """Public accessor for the receiver's bound port."""
+        if self._transport is None:
+            return None
+        sock = self._transport.get_extra_info("socket")
+        return sock.getsockname()[1] if sock else None
+
+    def queue_size(self) -> int:
+        return self._queue.qsize() if self._queue else 0
 
     async def stop(self) -> None:
         self._stopped = True

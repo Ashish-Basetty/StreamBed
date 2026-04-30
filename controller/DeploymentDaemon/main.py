@@ -25,11 +25,17 @@ from daemon_config import (
     DEVICE_ID,
     DEVICE_TYPE,
     MAX_FRAME_PAYLOAD_BYTES,
+    SIDECAR_FEEDBACK_PORT,
+    SIDECAR_IMAGE,
+    SIDECAR_LOCAL_UDP_PORT,
+    SIDECAR_PEER_ADDRESS,
+    SIDECAR_QUIC_BIND_PORT,
     STATE_PATH,
     STREAM_PROXY_HOST,
     STREAM_PROXY_PORT,
     STREAM_TARGET_PATH,
     STREAM_TARGET_POLL_INTERVAL,
+    STREAM_TRANSPORT,
     STREAMBED_CONFIG_HOST_PATH,
     STREAMBED_DATA_HOST_PATH,
     STREAMBED_MEMORY_LIMIT,
@@ -37,6 +43,7 @@ from daemon_config import (
     REGISTER_RETRIES,
     REGISTER_RETRY_DELAY,
 )
+from sidecar_supervisor import kill_sidecar, spawn_sidecar
 from stream_proxy_manager import StreamProxyManager
 from tcp_utils import _UDPSendOnlyProtocol, handle_tcp_stream
 
@@ -195,6 +202,26 @@ async def _cancel_task(task: asyncio.Task | None) -> None:
             pass
 
 
+def _spawn_sidecar_for_role() -> bool:
+    """Spawn the QUIC sidecar matching this daemon's role. No-op unless STREAM_TRANSPORT=quic."""
+    if STREAM_TRANSPORT != "quic":
+        return False
+    role = "edge" if DEVICE_TYPE == "edge" else "server"
+    return bool(
+        spawn_sidecar(
+            cluster=DEVICE_CLUSTER,
+            device_id=DEVICE_ID,
+            role=role,
+            image=SIDECAR_IMAGE,
+            peer_address=SIDECAR_PEER_ADDRESS or None,
+            local_udp_bind=f"0.0.0.0:{SIDECAR_LOCAL_UDP_PORT}",
+            daemon_address=f"{DAEMON_ADDRESS}:{SIDECAR_FEEDBACK_PORT}",
+            quic_bind=f"0.0.0.0:{SIDECAR_QUIC_BIND_PORT}",
+            local_server_udp=f"127.0.0.1:{STREAM_PROXY_PORT}",
+        )
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _register_with_retries()
@@ -300,6 +327,7 @@ def deploy(body: DeployRequest) -> dict:
         client.containers.run(body.image, **run_kwargs)
 
         _save_state(deploy_hash, body.image)
+        _spawn_sidecar_for_role()
         return {"ok": True, "container_hash": deploy_hash}
     except docker.errors.ImageNotFound:
         _stop_and_remove(new_container)
@@ -313,15 +341,22 @@ def deploy(body: DeployRequest) -> dict:
 
 @app.delete("/delete")
 def delete() -> dict:
-    """Delete the streambed container(s) managed by this daemon."""
+    """Delete the streambed inference container(s) managed by this daemon, and the sidecar."""
     try:
         client = _get_docker()
         containers = client.containers.list(filters={"status": "running"})
-        containers = [c for c in containers if c.name.startswith(f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-")]
+        prefix = f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-"
+        sidecar_name = f"{prefix}sidecar"
+        # Inference containers only — exclude the sidecar; it's killed explicitly below.
+        containers = [
+            c for c in containers
+            if c.name.startswith(prefix) and c.name != sidecar_name
+        ]
         if len(containers) == 0:
             return {"ok": False, "error": "No containers running"}
         for container in containers:
             _stop_and_remove(container.name)
+        kill_sidecar(cluster=DEVICE_CLUSTER, device_id=DEVICE_ID)
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}

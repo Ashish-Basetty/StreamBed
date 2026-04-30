@@ -5,7 +5,7 @@
 - [ ] Handle new device authentication
 - [ ] Verify adaptive streaming rate, optimize for round-trip latency on inference channel
 - [ ] Build out request router, so user can hit any router container and its routed to appropriate controller. Ideally with a master routing table/replicas and some consensus algorithm to recover on failure
-- [ ] Device management portal! Should show specific device cluster along with device statuses. Should provide a frontend interface, including docker model updates, and a model versioning management page.
+- [✔️] Device management portal! Should show specific device cluster along with device statuses. Should provide a frontend interface, including docker model updates, and a model versioning management page.
 
 ## Testing/Infrastructure
 - [ ] Identify best (and cheapest!) cloud provider/platform to test performance on

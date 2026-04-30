@@ -1,6 +1,11 @@
 # StreamBed: controller + deployment daemons per device.
 # Daemons register with the controller; a launch script deploys edge/server containers.
 # Run from project root. Create daemon-data dirs first: mkdir -p daemon-data/{edge1,edge2,edge3,server1,server2}/{streambed}
+#
+# QUIC sidecar rollout: set STREAM_TRANSPORT=quic on all daemons to flip the
+# inter-host transport. Each daemon will spawn its sidecar by name
+# `streambed-default-<device-id>-sidecar` (resolvable via docker DNS).
+# Default is udp until soak passes (see QuicSidecar.md).
 
 version: "3.9"
 
@@ -44,6 +49,9 @@ services:
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-edge1
       - VIDEO_SOURCE=synthetic
+      - STREAM_TRANSPORT=${STREAM_TRANSPORT:-udp}
+      - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
+      - SIDECAR_PEER_ADDRESS=streambed-default-server-001-sidecar:4433
     depends_on:
       - controller
     networks:
@@ -72,6 +80,9 @@ services:
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-edge2
       - VIDEO_SOURCE=synthetic
+      - STREAM_TRANSPORT=${STREAM_TRANSPORT:-udp}
+      - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
+      - SIDECAR_PEER_ADDRESS=streambed-default-server-001-sidecar:4433
     depends_on:
       - controller
     networks:
@@ -100,6 +111,9 @@ services:
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-edge3
       - VIDEO_SOURCE=synthetic
+      - STREAM_TRANSPORT=${STREAM_TRANSPORT:-udp}
+      - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
+      - SIDECAR_PEER_ADDRESS=streambed-default-server-001-sidecar:4433
     depends_on:
       - controller
     networks:
@@ -127,6 +141,8 @@ services:
       - DEVICE_TYPE=server
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-server1
+      - STREAM_TRANSPORT=${STREAM_TRANSPORT:-udp}
+      - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
     depends_on:
       - controller
     networks:
@@ -153,6 +169,8 @@ services:
       - DEVICE_TYPE=server
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-server2
+      - STREAM_TRANSPORT=${STREAM_TRANSPORT:-udp}
+      - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
     depends_on:
       - controller
     networks:

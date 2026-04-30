@@ -44,6 +44,15 @@ STREAMBED_DATA_HOST_PATH = os.environ.get("STREAMBED_DATA_HOST_PATH")
 VIDEO_SOURCE = os.environ.get("VIDEO_SOURCE")
 STREAM_PROXY_HOST = os.environ.get("STREAM_PROXY_HOST") or DAEMON_ADDRESS
 
+# QUIC sidecar wiring. STREAM_TRANSPORT=quic flips the daemon's send path to
+# 127.0.0.1:SIDECAR_LOCAL_UDP_PORT instead of writing direct UDP to the peer.
+STREAM_TRANSPORT = os.environ.get("STREAM_TRANSPORT", "udp").lower()
+SIDECAR_IMAGE = os.environ.get("SIDECAR_IMAGE", "ashishbasetty/streambed-quic-sidecar:latest")
+SIDECAR_PEER_ADDRESS = os.environ.get("SIDECAR_PEER_ADDRESS", "")  # e.g. "server-sidecar:4433"
+SIDECAR_LOCAL_UDP_PORT = int(os.environ.get("SIDECAR_LOCAL_UDP_PORT", "9050"))
+SIDECAR_QUIC_BIND_PORT = int(os.environ.get("SIDECAR_QUIC_BIND_PORT", "4433"))
+SIDECAR_FEEDBACK_PORT = int(os.environ.get("SIDECAR_FEEDBACK_PORT", "9051"))
+
 
 # Device Registration retry configuration
 REGISTER_RETRIES = 5

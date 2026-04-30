@@ -5,7 +5,8 @@ import os
 import struct
 
 CHUNK_MAGIC = b"CHNK"
-CHUNK_SIZE = 8000
+# Sized for QUIC datagram path: path MTU (~1500) - IP/UDP (~28) - QUIC framing (~30) - chunk header (32) leaves headroom.
+CHUNK_SIZE = 1200
 
 
 def make_chunks(payload: bytes, stream_id: bytes | None = None) -> list[bytes]:

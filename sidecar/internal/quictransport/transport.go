@@ -125,6 +125,14 @@ func Dial(ctx context.Context, peerAddr string, tlsCfg *tls.Config, m *metrics.R
 		_ = q.CloseWithError(1, "open control stream")
 		return nil, fmt.Errorf("open control stream: %w", err)
 	}
+	// Materialize the stream on the wire by writing an empty length-prefixed
+	// frame. quic-go's AcceptStream on the peer only fires once a STREAM frame
+	// arrives, and OpenStreamSync alone does not flush until data is written.
+	var initHdr [4]byte
+	if _, err := stream.Write(initHdr[:]); err != nil {
+		_ = q.CloseWithError(1, "init control stream")
+		return nil, fmt.Errorf("init control stream: %w", err)
+	}
 	return &Conn{q: q, ctrl: stream, m: m}, nil
 }
 
@@ -192,6 +200,12 @@ func acceptOne(ctx context.Context, ln *quic.Listener, m *metrics.Registry) (*Co
 	if err != nil {
 		_ = q.CloseWithError(1, "accept control stream")
 		return nil, fmt.Errorf("accept control stream: %w", err)
+	}
+	// Consume the 4-byte init frame the edge writes on Dial. See Dial for why.
+	var initHdr [4]byte
+	if _, err := io.ReadFull(stream, initHdr[:]); err != nil {
+		_ = q.CloseWithError(1, "read init control frame")
+		return nil, fmt.Errorf("read init control frame: %w", err)
 	}
 	return &Conn{q: q, ctrl: stream, m: m}, nil
 }

@@ -159,11 +159,15 @@ Five new test layers, tagged `integration_quic`, runnable via `pytest -m integra
 ### Layer 3 — Closed-loop adaptive-rate test ✅ (partial)
 [tests/quic/test_adaptive_under_loss.py](tests/quic/test_adaptive_under_loss.py): `test_bandwidth_estimator_responds_to_feedback` smoke-tests the `CompositeBackend`/`ServerFeedbackBackend` API — passes without the sidecar. The full closed-loop test (drive frames through chaosproxy, assert `should_drop_video_frame` engages) is deferred to `test_dynamic_interleaving.py` once the feedback path is wired; see weakness table.
 
-### Layer 4 — Long-soak + leak detection ⬜
-[tests/quic/test_soak.py](tests/quic/test_soak.py): scaffold only. Skipped unless `STREAMBED_RUN_SOAK=1`. Needs: RSS scraper for `:9100/metrics`, 15-minute chaosproxy run, slope-of-RSS assertion. Tagged `pytest -m soak`.
+### Layer 4 — Long-soak + leak detection ✅
+[tests/quic/test_soak.py](tests/quic/test_soak.py): spawns a real edge↔server sidecar pair via [tests/quic/conftest.py](tests/quic/conftest.py)::`sidecar_pair_factory`, drives sustained CHNK traffic, scrapes RSS via `ps -o rss=` at 5s cadence, and asserts post-warmup linear-fit slope < 50 KB/s. Default duration 30s (developer-friendly); override with `STREAMBED_SOAK_DURATION_SECS=900` for the 15-minute weekly run. Skipped unless `STREAMBED_RUN_SOAK=1`. Sample run on darwin: server slope 23.5 KB/s, edge slope 31.8 KB/s (Go runtime amortization).
 
-### Layer 5 — Multi-flow contention ⬜
-[tests/quic/test_multiflow_fairness.py](tests/quic/test_multiflow_fairness.py): scaffold only. Skipped unless `go` is on PATH. Requires: 3 `StreamBedUDPSender` goroutines (or one saturating sender + two lighter ones), one sidecar pair, fairness assertion ≥30% for non-saturating flows. Tagged `pytest -m soak`.
+### Layer 5 — Multi-flow contention ✅
+[tests/quic/test_multiflow_fairness.py](tests/quic/test_multiflow_fairness.py): 3 edges → 1 server, each on its own QUIC connection. Each edge tags its CHNK datagrams with a unique 16-byte stream_id; a UDP listener at the server's local-server port counts deliveries per stream_id. Asserts the slowest edge gets ≥70% of mean (catches starvation in the multi-conn server). Sample run: `[200, 200, 200]` — all edges fully delivered.
+
+**Required Go fixes ([sidecar/internal/quictransport/transport.go](sidecar/internal/quictransport/transport.go)):**
+- **Multi-connection accept loop:** `Listen` only accepted one peer; replaced with `ListenAll` returning a `*Listener` that the server's `Run` accepts on forever, spawning a per-peer `handlePeer` goroutine. Single-conn `Listen` is kept for callers that don't need multi-flow.
+- **Control-stream materialization handshake:** quic-go's `OpenStreamSync` does not flush a STREAM frame until data is written, so the peer's `AcceptStream` would hang until the connection's idle timeout. Edge now writes a 4-byte zero-length init frame in `Dial`; server consumes it in `acceptOne`. Without this, every test would fail with `Application error 0x1 (remote): accept control stream` after ~5s.
 
 ### Decoupling existing tests from private state ✅
 `recv_one(timeout)`, `get_local_port()`, and `queue_size()` added to `StreamBedUDPReceiver` ([shared/interfaces/stream_interface.py](shared/interfaces/stream_interface.py)). All three test files refactored off `receiver._queue` / `receiver._transport`.
@@ -193,8 +197,11 @@ Five new test layers, tagged `integration_quic`, runnable via `pytest -m integra
 | `tests/quic/test_codec_property.py` | Hypothesis round-trip (Python). Go dispatch covered by `protocol_test.go`. | ✅ New |
 | `tests/quic/test_adaptive_under_loss.py` | Bandwidth estimator smoke. Full closed-loop deferred. | ✅ (partial) |
 | `tests/quic/test_chaos_matrix.py` | Scaffold: scenarios defined, test body not implemented. | ⬜ Scaffold |
-| `tests/quic/test_soak.py` | Scaffold: skipped unless `STREAMBED_RUN_SOAK=1`. | ⬜ Scaffold |
-| `tests/quic/test_multiflow_fairness.py` | Scaffold: skipped unless `go` on PATH. | ⬜ Scaffold |
+| `tests/quic/test_soak.py` | Real subprocess sidecar pair, RSS slope assertion, 30s default / `STREAMBED_SOAK_DURATION_SECS` override. | ✅ |
+| `tests/quic/test_multiflow_fairness.py` | 3 edges → 1 server, per-stream-id delivery counting, fair-share floor. | ✅ |
+| `tests/quic/conftest.py` | `sidecar_binary` (session-scoped Go build) + `sidecar_pair_factory` (subprocess spawn helper) + `process_rss_kb` + `scrape_metric`. | ✅ New |
+| `sidecar/internal/quictransport/transport.go` | `ListenAll`/`Listener` for multi-conn server; 4-byte init handshake on the control stream. | ✅ Updated |
+| `sidecar/internal/server/server.go` | Multi-peer accept loop + per-peer `handlePeer` goroutine. | ✅ Updated |
 | `QuicSidecar.md` | Operator runbook: env vars, rollback, RTT stub note, TLS migration path. | ⬜ |
 | `SemanticSidecarFuture.md` | Option C future-PR sketch. | ⬜ |
 
@@ -230,8 +237,8 @@ End-to-end, in order:
 4. **Adaptive smoke:** `pytest tests/quic/test_adaptive_under_loss.py` — bandwidth estimator + feedback convergence. ✅ Runnable now.
 5. **Integration smoke:** `STREAM_TRANSPORT=quic pytest tests/test_integration_stream_to_storage.py` — same assertions, new transport. ⬜ Blocked on `server/app.py` listen-host flip and sidecar binary in path.
 6. **Chaos matrix:** `pytest tests/quic/test_chaos_matrix.py -v`. ⬜ Test body not implemented.
-7. **Multi-flow fairness:** `pytest tests/quic/test_multiflow_fairness.py`. ⬜ Scaffold.
-8. **Soak (manual / weekly):** `STREAMBED_RUN_SOAK=1 pytest -m soak tests/quic/test_soak.py`. ⬜ Scaffold.
+7. **Multi-flow fairness:** `pytest tests/quic/test_multiflow_fairness.py`. ✅ Runnable now (requires Go toolchain). Sample: `[200, 200, 200]` delivered.
+8. **Soak (manual / weekly):** `STREAMBED_RUN_SOAK=1 pytest tests/quic/test_soak.py`. ✅ Runnable now. Default 30s; `STREAMBED_SOAK_DURATION_SECS=900` for 15-min run.
 9. **Manual:** `docker compose up`; `curl http://localhost:9100/metrics` on each sidecar; check daemon logs for `[Daemon] sidecar spawned` log line; sanity-check `handshake_ms` is sub-100ms. ⬜ Requires sidecar image push.
 10. **Rollback:** `STREAM_TRANSPORT=udp docker compose up`; rerun step 1 — must still pass on the original UDP path. ✅ Runnable now.
 

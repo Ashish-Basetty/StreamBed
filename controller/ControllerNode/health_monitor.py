@@ -20,6 +20,7 @@ import httpx
 from db import (
     get_connection,
     get_device_address,
+    get_device_ip,
     get_device_status,
     get_last_deployment,
     set_device_status_evaluated,
@@ -227,11 +228,17 @@ class HealthMonitor:
                 FROM routing
                 """
             ).fetchall()
+            pushed = 0
             for row in rows:
                 cluster, edge_id, target_server = row["source_cluster"], row["source_device"], row["target_device"]
-                await self._update_edge_target(cluster, edge_id, target_server, 9000)
-            if rows:
-                logger.info(f"Synced stream-target for {len(rows)} edge(s) from routing table")
+                target_ip = get_device_ip(cluster, target_server)
+                if not target_ip:
+                    logger.warning(f"{cluster}/{target_server}: no IP registered, skipping target push for {edge_id}")
+                    continue
+                await self._update_edge_target(cluster, edge_id, target_ip, 9000)
+                pushed += 1
+            if pushed:
+                logger.info(f"Synced stream-target for {pushed} edge(s) from routing table")
         except Exception as e:
             logger.error(f"Failed to sync stream-target from routing: {e}")
         finally:
@@ -239,10 +246,13 @@ class HealthMonitor:
 
     async def _reroute_edges(self, cluster: str, edges, target_server: str):
         """Reroute edges to a healthy server.
-        Uses target_server (device_id, e.g. server-001) as hostname and port 9000
-        (stream listen port). Server containers get a network alias = device_id at deploy.
+        Resolves target_server (device_id) to the IP recorded at registration time
+        so the system works across hosts (no Docker DNS dependency).
         """
-        target_ip = target_server
+        target_ip = get_device_ip(cluster, target_server)
+        if not target_ip:
+            logger.error(f"{cluster}: cannot reroute, no IP registered for target server {target_server}")
+            return
         target_port = 9000  # STREAM_LISTEN_PORT on server
 
         for edge in edges:

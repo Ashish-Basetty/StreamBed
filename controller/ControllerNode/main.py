@@ -214,6 +214,17 @@ def deregister_device_endpoint(request: Request, body: RegisterRequest) -> dict:
     return {"ok": True, "device_cluster": body.device_cluster, "device_id": body.device_id}
 
 
+@app.get("/clusters")
+def list_clusters() -> dict:
+    """List all distinct cluster names that have at least one registered device."""
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT DISTINCT device_cluster FROM devices ORDER BY device_cluster").fetchall()
+        return {"clusters": [row["device_cluster"] for row in rows]}
+    finally:
+        conn.close()
+
+
 @app.get("/devices")
 def list_devices(device_cluster: str) -> dict:
     """List registered devices in a cluster. device_cluster is required."""
@@ -222,7 +233,7 @@ def list_devices(device_cluster: str) -> dict:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT device_cluster, device_id, ip, registered_at FROM devices WHERE device_cluster = ?",
+            "SELECT device_cluster, device_id, device_type, ip, registered_at FROM devices WHERE device_cluster = ?",
             (device_cluster,),
         ).fetchall()
         return {"devices": [dict(row) for row in rows]}

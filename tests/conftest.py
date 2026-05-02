@@ -23,8 +23,34 @@ _TEST_FAILURE_LOGS_DIR = _PROJECT_ROOT / "tests" / "logs"
 # Docker mounts ./controller/data:/app/data, so DB is at controller/data/controller.db
 # Local runs use controller/ControllerNode/data/controller.db
 _CONTROLLER_DB_PATH = _PROJECT_ROOT / "controller" / "data" / "controller.db"
+_CONTROLLER_DB_PATHS = [
+    _CONTROLLER_DB_PATH,
+    _PROJECT_ROOT / "controller" / "ControllerNode" / "data" / "controller.db",
+]
 
 _ALL_DEVICE_IDS = ["server-001", "server-002", "edge-001", "edge-002", "edge-003"]
+
+
+def _wipe_controller_db() -> None:
+    """Remove all known controller.db locations and SQLite sidecar files."""
+    for db in _CONTROLLER_DB_PATHS:
+        for suffix in ("", "-journal", "-wal", "-shm"):
+            p = Path(str(db) + suffix)
+            if p.exists():
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _clean_controller_db_each_session():
+    """Wipe controller.db before and after every test session, regardless of
+    which fixtures the session uses. Prevents stale device/routing rows from
+    leaking between runs."""
+    _wipe_controller_db()
+    yield
+    _wipe_controller_db()
 
 
 @pytest.fixture(scope="session")

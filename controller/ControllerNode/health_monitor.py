@@ -28,6 +28,7 @@ from db import (
     get_cluster_status,
 )
 from deploy import delete_container_from_device, deploy_to_device, DeployError
+from routing import assign_unrouted_edges, orphan_edges_for_server
 from shared.interfaces.heartbeat_spec import HeartbeatStatus
 
 
@@ -83,29 +84,41 @@ class HealthMonitor:
     async def _monitor_loop(self):
         """Main monitoring loop."""
         logger.info("[DEBUG] Entered HealthMonitor._monitor_loop()")
-        loop_count = 0
         while self.running:
-            loop_count += 1
             # allow services time to start
             if datetime.utcnow() - self.start_time < self.startup_grace:
                 logger.info("Startup grace period active")
                 await asyncio.sleep(self.check_interval)
                 continue
 
-            # Periodically sync stream-targets from routing table
-            now = datetime.utcnow()
-            if self._last_stream_target_sync is None or now - self._last_stream_target_sync >= self.stream_target_sync_interval:
-                await self._sync_stream_targets_from_routing()
-                self._last_stream_target_sync = now
-
-            clusters = self._get_clusters()
-
-            for cluster in clusters:
-                states = await self._evaluate_cluster(cluster)
-                # logger.info(f"HealthMonitor: {cluster} states: {states}")
-                await self._process_cluster_health(cluster, states)
-                self.prev_device_states.update(states)
+            await self._routing_tick()
             await asyncio.sleep(self.check_interval)
+
+    async def _routing_tick(self) -> None:
+        """One periodic pass over routing concerns.
+
+        Runs every `check_interval`. Two operations, in order:
+          1. Failover: for every cluster, evaluate device states and trigger
+             orphan + reassign on any server that is UNRESPONSIVE or has no
+             deployment row.
+          2. Bulk stream-target sync (safety net): every
+             `stream_target_sync_interval`, re-push every routing row to its
+             edge daemon. This catches any failover push that was lost and
+             corrects state that may have drifted out-of-band.
+        """
+        clusters = self._get_clusters()
+        for cluster in clusters:
+            states = await self._evaluate_cluster(cluster)
+            await self._process_cluster_health(cluster, states)
+            self.prev_device_states.update(states)
+
+        now = datetime.utcnow()
+        if (
+            self._last_stream_target_sync is None
+            or now - self._last_stream_target_sync >= self.stream_target_sync_interval
+        ):
+            await self._sync_stream_targets_from_routing()
+            self._last_stream_target_sync = now
 
     def _get_clusters(self):
         """Return list of clusters based on device_status table (more robust)."""
@@ -197,26 +210,47 @@ class HealthMonitor:
         return states
 
     async def _process_cluster_health(self, cluster: str, states: Dict[str, str]):
-        """Process the health of a cluster."""
+        """Process the health of a cluster.
 
+        A server is considered "failed for routing purposes" if it is either:
+          - UNRESPONSIVE (heartbeat timeout), or
+          - has no row in the `deployments` table (i.e. "No Model Deployed",
+            the same condition the frontend renders as the purple badge).
+        """
         servers = [d for d in states if d.startswith("server")]
-        edges = [d for d in states if d.startswith("edge")]
+        deployed = get_cluster_deployments(cluster)  # {device_id: dict}
+        healthy_servers = [
+            s for s in servers if states[s] == "ACTIVE" and s in deployed
+        ]
 
-        healthy_servers = [s for s in servers if states[s] == "ACTIVE"]
+        for device in servers:
+            if states[device] == "UNRESPONSIVE":
+                reason = "unresponsive"
+            elif device not in deployed:
+                reason = "no model deployed"
+            else:
+                continue
 
-        for device, state in states.items():
+            if not healthy_servers:
+                logger.warning(
+                    f"{cluster}: server {device} {reason} but no healthy "
+                    f"servers available"
+                )
+                continue
 
-            if device.startswith("server") and state == "UNRESPONSIVE":
+            logger.warning(
+                f"{cluster}: server {device} {reason}, orphaning its edges "
+                f"and reassigning"
+            )
+            orphaned = orphan_edges_for_server(cluster, device)
+            if not orphaned:
+                continue
 
-                if healthy_servers:
-                    logger.warning(
-                        f"{cluster}: server failure detected, rerouting edges"
-                    )
-                    await self._reroute_edges(cluster, edges, healthy_servers[0])
-                else:
-                    logger.warning(
-                        f"{cluster}: server failure but no healthy servers available"
-                    )
+            # Greedy reassignment across remaining servers (same path /register uses).
+            assign_unrouted_edges(cluster)
+
+            # Push the new stream-target to each previously-orphaned edge.
+            await self._push_targets_for_edges(cluster, orphaned)
 
     async def _sync_stream_targets_from_routing(self) -> None:
         """Push routing table to edge daemons' stream-target. Runs once after startup grace."""
@@ -244,42 +278,32 @@ class HealthMonitor:
         finally:
             conn.close()
 
-    async def _reroute_edges(self, cluster: str, edges, target_server: str):
-        """Reroute edges to a healthy server.
-        Resolves target_server (device_id) to the IP recorded at registration time
-        so the system works across hosts (no Docker DNS dependency).
+    async def _push_targets_for_edges(self, cluster: str, edge_ids: list[str]) -> None:
+        """Push the current routing target to each edge's deployment daemon.
+        Reads the freshly-written routing rows and resolves target IPs.
         """
-        target_ip = get_device_ip(cluster, target_server)
-        if not target_ip:
-            logger.error(f"{cluster}: cannot reroute, no IP registered for target server {target_server}")
+        if not edge_ids:
             return
-        target_port = 9000  # STREAM_LISTEN_PORT on server
-
-        for edge in edges:
-            await self._update_edge_target(cluster, edge, target_ip, target_port)
-            # Update routing table to reflect new assignment
-            self._update_routing_table(cluster, edge, cluster, target_server)
-
-    def _update_routing_table(self, source_cluster, source_device, target_cluster, target_device):
-        """Insert or update the routing table for an edge-server assignment."""
         conn = get_connection()
         try:
-            conn.execute(
-                """
-                INSERT INTO routing (source_cluster, source_device, target_cluster, target_device, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(source_cluster, source_device) DO UPDATE SET
-                    target_cluster=excluded.target_cluster,
-                    target_device=excluded.target_device,
-                    updated_at=CURRENT_TIMESTAMP
-                """,
-                (source_cluster, source_device, target_cluster, target_device)
-            )
-            conn.commit()
-        except Exception as e:
-            logger.error(f"[DEBUG] Error updating routing table: {e}")
+            placeholders = ",".join("?" for _ in edge_ids)
+            rows = conn.execute(
+                f"""SELECT source_device, target_device FROM routing
+                    WHERE source_cluster=? AND source_device IN ({placeholders})""",
+                (cluster, *edge_ids),
+            ).fetchall()
         finally:
             conn.close()
+
+        for row in rows:
+            edge_id, target_server = row["source_device"], row["target_device"]
+            target_ip = get_device_ip(cluster, target_server)
+            if not target_ip:
+                logger.error(
+                    f"{cluster}/{edge_id}: cannot push target, no IP for {target_server}"
+                )
+                continue
+            await self._update_edge_target(cluster, edge_id, target_ip, 9000)
 
     async def _update_edge_target(
         self,

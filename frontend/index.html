@@ -384,7 +384,7 @@
                 </template>
               </div>
               <div class="meta">
-                <template x-if="hasRunningModel(srv.device)">
+                <template x-if="hasModel(srv.device) && hasRunningModel(srv.device)">
                   <div>
                     <a class="model-pill"
                        :href="dockerhubUrl(srv.device)"

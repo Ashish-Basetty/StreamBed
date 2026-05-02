@@ -19,7 +19,7 @@ import time
 import httpx
 import pytest
 
-from tests.deploy_utils import deploy_device, delete_device
+from tests.deploy_utils import deploy_device, delete_device, _wait_for_devices_registered
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_docker]
 
@@ -34,13 +34,26 @@ ROUTING_POLL_INTERVAL_SEC = 2
 
 @pytest.fixture(scope="module")
 def routing(deployment_stack):
-    """Deploy all devices, fetch the routing table, then clean up."""
+    """Deploy all devices, fetch the routing table, then clean up.
+
+    Servers are deployed and confirmed registered with the controller *before*
+    edges, so least-loaded balancing has both targets available when each edge
+    calls POST /register.
+    """
     for device_id in ALL_DEVICES:
         try:
             delete_device(device_id, controller_url=CONTROLLER_URL)
         except Exception:
             pass
-        deploy_device(device_id, controller_url=CONTROLLER_URL)
+
+    for server_id in EXPECTED_SERVERS:
+        deploy_device(server_id, controller_url=CONTROLLER_URL)
+    _wait_for_devices_registered(
+        CONTROLLER_URL, list(EXPECTED_SERVERS), CLUSTER
+    )
+
+    for edge_id in EXPECTED_EDGES:
+        deploy_device(edge_id, controller_url=CONTROLLER_URL)
 
     # Wait for inference containers to register and the routing table to populate.
     # deploy_device returns when the daemon has the container running, not when

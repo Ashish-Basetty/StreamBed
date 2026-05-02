@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from db import get_connection, init_db, register_device, update_heartbeat
+from db import get_connection, init_db, register_device, deregister_device, update_heartbeat, get_cluster_deployments
 from deploy import DeployError, DeviceNotFoundError, deploy_to_device, delete_container_from_device
 from health_monitor import create_and_start_monitor, HealthMonitor
 from shared.interfaces.heartbeat_spec import HeartbeatStatus
@@ -329,6 +329,27 @@ def list_status(device_cluster: str | None = None) -> dict:
         return {"status": [dict(row) for row in rows]}
     finally:
         conn.close()
+
+@app.get("/deployments")
+def list_deployments(device_cluster: str | None = None) -> dict:
+    """List recorded deployments (optionally filtered by cluster)."""
+    conn = get_connection()
+    try:
+        if device_cluster:
+            rows = conn.execute(
+                """SELECT device_cluster, device_id, device_type, image, host_port, container_port, deployed_at
+                   FROM deployments WHERE device_cluster = ?""",
+                (device_cluster,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT device_cluster, device_id, device_type, image, host_port, container_port, deployed_at
+                   FROM deployments"""
+            ).fetchall()
+        return {"deployments": [dict(row) for row in rows]}
+    finally:
+        conn.close()
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)

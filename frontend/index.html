@@ -81,6 +81,11 @@
     .btn-primary:hover { background: #3a5ce4; }
     .btn-danger  { background: #dc3545; color: #fff; }
     .btn-danger:hover  { background: #c82333; }
+    .btn-warning { background: #f0a020; color: #fff; }
+    .btn-warning:hover { background: #d88a10; }
+    .btn-warning:disabled { background: #d8d8d8; color: #888; cursor: not-allowed; }
+    .btn-secondary { background: #555; color: #fff; }
+    .btn-secondary:hover { background: #333; }
     .btn-sm { padding: 4px 12px; font-size: 0.8rem; }
     .btn-row { display: flex; gap: 8px; margin-top: 6px; }
 
@@ -188,6 +193,49 @@
     .header-search .search-item { font-weight: 600; }
 
     .badge-no-model { background: #e6d9ff; color: #4b1e9e; }
+
+    .model-pill {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      background: #e8efff;
+      color: #2c4ec0;
+      border: 1px solid #c8d4f8;
+      text-decoration: none;
+    }
+    .model-pill:hover { background: #d5e1ff; text-decoration: underline; }
+
+    .tip { position: relative; cursor: help; }
+    .tip:hover::after {
+      content: attr(data-tip);
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #222;
+      color: #fff;
+      padding: 5px 9px;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 400;
+      white-space: nowrap;
+      z-index: 1000;
+      pointer-events: none;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    }
+    .tip:hover::before {
+      content: '';
+      position: absolute;
+      bottom: calc(100% + 1px);
+      left: 50%;
+      transform: translateX(-50%);
+      border: 5px solid transparent;
+      border-top-color: #222;
+      z-index: 1000;
+      pointer-events: none;
+    }
     .search-input {
       width: 100%;
       padding: 10px 14px;
@@ -324,23 +372,33 @@
               <div>
                 <span class="server-id" x-text="srv.device.device_id"></span>
                 <template x-if="hasModel(srv.device)">
-                  <span class="badge" :class="badgeClass(srv.device.status)" x-text="srv.device.status || 'Unknown'"></span>
+                  <span class="badge tip"
+                        :class="badgeClass(srv.device.status)"
+                        data-tip="Status: time of last heartbeat (local)"
+                        x-text="(srv.device.status || 'Unknown') + ': ' + fmtTime(srv.device.last_heartbeat)"></span>
                 </template>
                 <template x-if="!hasModel(srv.device)">
-                  <span class="badge badge-no-model">No Model Deployed</span>
+                  <span class="badge badge-no-model tip"
+                        data-tip="No model deployed. Time = last heartbeat (local)."
+                        x-text="'No Model Deployed: ' + fmtTime(srv.device.last_heartbeat)"></span>
                 </template>
               </div>
               <div class="meta">
-                <template x-if="hasModel(srv.device)">
-                  <div>Model: <span x-text="srv.device.current_model"></span></div>
+                <template x-if="hasRunningModel(srv.device)">
+                  <div>
+                    <a class="model-pill"
+                       :href="dockerhubUrl(srv.device)"
+                       target="_blank" rel="noopener"
+                       x-text="'Model: ' + srv.device.current_model"></a>
+                  </div>
                 </template>
-                <div>Heartbeat: <span x-text="fmtTime(srv.device.last_heartbeat)"></span></div>
               </div>
               <div class="deploy-row">
                 <input class="model-input" x-model="srv.device._newImage" placeholder="user/repo:tag" />
                 <input class="port-input" x-model="srv.device._hostPort" placeholder="port" type="number" />
                 <button class="btn btn-primary btn-sm" @click="deployFromRow(srv.device)">Deploy</button>
                 <button class="btn btn-danger btn-sm" @click="removeFromRow(srv.device)">Remove</button>
+                <button class="btn btn-warning btn-sm" :disabled="!hasModel(srv.device)" @click="restartFromRow(srv.device)">Restart</button>
               </div>
             </div>
 
@@ -355,25 +413,32 @@
                   <div class="edge-head">
                     <span x-text="e.device_id" class="edge-id"></span>
                     <template x-if="hasModel(e)">
-                      <span class="badge" :class="badgeClass(e.status)" x-text="e.status || 'Unknown'"></span>
+                      <span class="badge tip"
+                            :class="badgeClass(e.status)"
+                            data-tip="Status: time of last heartbeat (local)"
+                            x-text="(e.status || 'Unknown') + ': ' + fmtTime(e.last_heartbeat)"></span>
                     </template>
                     <template x-if="!hasModel(e)">
-                      <span class="badge badge-no-model">No Model Deployed</span>
+                      <span class="badge badge-no-model tip"
+                            data-tip="No model deployed. Time = last heartbeat (local)."
+                            x-text="'No Model Deployed: ' + fmtTime(e.last_heartbeat)"></span>
                     </template>
                   </div>
                   <div class="meta">
-                    <template x-if="hasModel(e)">
-                      <span>Model: <span x-text="e.current_model"></span></span>
+                    <template x-if="hasRunningModel(e)">
+                      <a class="model-pill"
+                         :href="dockerhubUrl(e)"
+                         target="_blank" rel="noopener"
+                         x-text="'Model: ' + e.current_model"></a>
                     </template>
-                    <span x-show="hasModel(e)">·</span>
-                    <span>HB: <span x-text="fmtTime(e.last_heartbeat)"></span></span>
-                    <span x-show="e._routeUpdated">· routed: <span x-text="fmtTime(e._routeUpdated)"></span></span>
+                    <span x-show="e._routeUpdated">ROUTED: <span x-text="fmtTime(e._routeUpdated)"></span></span>
                   </div>
                   <div class="deploy-row">
                     <input class="model-input" x-model="e._newImage" placeholder="user/repo:tag" />
                     <input class="port-input" x-model="e._hostPort" placeholder="port" type="number" />
                     <button class="btn btn-primary btn-sm" @click="deployFromRow(e)">Deploy</button>
                     <button class="btn btn-danger btn-sm" @click="removeFromRow(e)">Remove</button>
+                    <button class="btn btn-warning btn-sm" :disabled="!hasModel(e)" @click="restartFromRow(e)">Restart</button>
                   </div>
                 </div>
               </template>
@@ -394,24 +459,31 @@
                   <div class="edge-head">
                     <span x-text="e.device_id" class="edge-id"></span>
                     <template x-if="hasModel(e)">
-                      <span class="badge" :class="badgeClass(e.status)" x-text="e.status || 'Unknown'"></span>
+                      <span class="badge tip"
+                            :class="badgeClass(e.status)"
+                            data-tip="Status: time of last heartbeat (local)"
+                            x-text="(e.status || 'Unknown') + ': ' + fmtTime(e.last_heartbeat)"></span>
                     </template>
                     <template x-if="!hasModel(e)">
-                      <span class="badge badge-no-model">No Model Deployed</span>
+                      <span class="badge badge-no-model tip"
+                            data-tip="No model deployed. Time = last heartbeat (local)."
+                            x-text="'No Model Deployed: ' + fmtTime(e.last_heartbeat)"></span>
                     </template>
                   </div>
                   <div class="meta">
-                    <template x-if="hasModel(e)">
-                      <span>Model: <span x-text="e.current_model"></span></span>
+                    <template x-if="hasRunningModel(e)">
+                      <a class="model-pill"
+                         :href="dockerhubUrl(e)"
+                         target="_blank" rel="noopener"
+                         x-text="'Model: ' + e.current_model"></a>
                     </template>
-                    <span x-show="hasModel(e)">·</span>
-                    <span>HB: <span x-text="fmtTime(e.last_heartbeat)"></span></span>
                   </div>
                   <div class="deploy-row">
                     <input class="model-input" x-model="e._newImage" placeholder="user/repo:tag" />
                     <input class="port-input" x-model="e._hostPort" placeholder="port" type="number" />
                     <button class="btn btn-primary btn-sm" @click="deployFromRow(e)">Deploy</button>
                     <button class="btn btn-danger btn-sm" @click="removeFromRow(e)">Remove</button>
+                    <button class="btn btn-warning btn-sm" :disabled="!hasModel(e)" @click="restartFromRow(e)">Restart</button>
                   </div>
                 </div>
               </template>

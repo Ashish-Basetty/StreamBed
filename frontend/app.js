@@ -1,68 +1,101 @@
 function app() {
   return {
     API: 'http://localhost:8080',
-    clusters: [],
+    clusterNames: [],
+    selectedCluster: null,
+    cluster: null,
+    query: '',
+    showDropdown: false,
     error: null,
     lastRefresh: '',
     toast: { visible: false, msg: '', ok: true },
 
     async init() {
-      await this.refresh();
-      setInterval(() => this.refresh(), 10000);
+      const params = new URLSearchParams(window.location.search);
+      this.selectedCluster = params.get('cluster');
+      await this.loadClusterNames();
+      if (this.selectedCluster) {
+        this.query = this.selectedCluster;
+        await this.refresh();
+        setInterval(() => this.refresh(), 10000);
+      }
+    },
+
+    async loadClusterNames() {
+      try {
+        const res = await fetch(`${this.API}/clusters`);
+        if (!res.ok) throw new Error('clusters: ' + (await res.text()));
+        this.clusterNames = ((await res.json()).clusters || []).sort();
+      } catch (e) {
+        this.error = e.message;
+      }
+    },
+
+    get filteredClusters() {
+      const q = this.query.trim().toLowerCase();
+      if (!q) return this.clusterNames;
+      return this.clusterNames.filter(n => n.toLowerCase().startsWith(q));
+    },
+
+    selectCluster(name) {
+      if (!name) return;
+      window.location.search = '?cluster=' + encodeURIComponent(name);
+    },
+
+    submitSearch() {
+      const matches = this.filteredClusters;
+      const target = this.clusterNames.includes(this.query.trim())
+        ? this.query.trim()
+        : matches[0];
+      if (target) this.selectCluster(target);
+    },
+
+    clearCluster() {
+      window.location.search = '';
     },
 
     async refresh() {
+      if (!this.selectedCluster) return;
       this.error = null;
       try {
-        // Discover clusters, status, and routing in parallel.
-        const [clustersRes, statusRes, routingRes] = await Promise.all([
-          fetch(`${this.API}/clusters`),
+        const [statusRes, routingRes, devicesRes] = await Promise.all([
           fetch(`${this.API}/status`),
           fetch(`${this.API}/routing`),
+          fetch(`${this.API}/devices?device_cluster=${encodeURIComponent(this.selectedCluster)}`),
         ]);
-        if (!clustersRes.ok) throw new Error('clusters: ' + (await clustersRes.text()));
         if (!statusRes.ok) throw new Error('status: ' + (await statusRes.text()));
         if (!routingRes.ok) throw new Error('routing: ' + (await routingRes.text()));
-        const clusterNames = (await clustersRes.json()).clusters || [];
-        const statusList = (await statusRes.json()).status || [];
-        const routing = (await routingRes.json()).routing || [];
+        if (!devicesRes.ok) throw new Error('devices: ' + (await devicesRes.text()));
+        const statusList = ((await statusRes.json()).status || [])
+          .filter(s => s.device_cluster === this.selectedCluster);
+        const routing = ((await routingRes.json()).routing || [])
+          .filter(r => r.source_cluster === this.selectedCluster);
+        const devices = (await devicesRes.json()).devices || [];
 
-        // Fetch device lists for all clusters in parallel.
-        const deviceFetches = await Promise.all(
-          clusterNames.map(c =>
-            fetch(`${this.API}/devices?device_cluster=${encodeURIComponent(c)}`)
-              .then(r => r.json()).then(d => d.devices || [])
-          )
-        );
-        const allDevices = deviceFetches.flat();
-
-        this.clusters = this.buildClusters(allDevices, statusList, routing);
+        this.cluster = this.buildCluster(this.selectedCluster, devices, statusList, routing);
         this.lastRefresh = 'Last updated: ' + new Date().toLocaleTimeString();
       } catch (e) {
         this.error = e.message;
       }
     },
 
-    buildClusters(devices, statusList, routing) {
-      // Look up status by "cluster/device_id".
+    buildCluster(name, devices, statusList, routing) {
       const statusMap = {};
       for (const s of statusList) {
         statusMap[`${s.device_cluster}/${s.device_id}`] = s;
       }
-      // Routing entries keyed by edge "cluster/device_id" → target_device + updated_at.
       const routeByEdge = {};
       for (const r of routing) {
         routeByEdge[`${r.source_cluster}/${r.source_device}`] = r;
       }
 
-      // Preserve _newImage/_hostPort across refreshes by reusing prior device objects.
       const priorById = {};
-      for (const c of this.clusters) {
-        for (const srv of c.servers) {
+      if (this.cluster) {
+        for (const srv of this.cluster.servers) {
           priorById[srv.device.device_id] = srv.device;
           for (const e of srv.edges) priorById[e.device_id] = e;
         }
-        for (const e of c.unassignedEdges) priorById[e.device_id] = e;
+        for (const e of this.cluster.unassignedEdges) priorById[e.device_id] = e;
       }
 
       const decorate = (d) => {
@@ -82,35 +115,28 @@ function app() {
         };
       };
 
-      // Group devices by cluster.
-      const byCluster = {};
-      for (const raw of devices) {
-        const d = decorate(raw);
-        (byCluster[d.device_cluster] ??= []).push(d);
-      }
+      const decorated = devices.map(decorate);
+      const servers = decorated.filter(d => d.device_type === 'server');
+      const edges = decorated.filter(d => d.device_type === 'edge');
 
-      const result = [];
-      for (const [name, devs] of Object.entries(byCluster)) {
-        const servers = devs.filter(d => d.device_type === 'server');
-        const edges = devs.filter(d => d.device_type === 'edge');
+      const serverCards = servers.map(srv => ({
+        device: srv,
+        edges: edges.filter(e => e._routeTarget === srv.device_id),
+      }));
+      const assigned = new Set();
+      for (const sc of serverCards) for (const e of sc.edges) assigned.add(e.device_id);
+      const unassignedEdges = edges.filter(e => !assigned.has(e.device_id));
 
-        const serverCards = servers.map(srv => ({
-          device: srv,
-          edges: edges.filter(e => e._routeTarget === srv.device_id),
-        }));
-        const assigned = new Set();
-        for (const sc of serverCards) for (const e of sc.edges) assigned.add(e.device_id);
-        const unassignedEdges = edges.filter(e => !assigned.has(e.device_id));
+      return {
+        name,
+        servers: serverCards,
+        unassignedEdges,
+        totalEdges: edges.length,
+      };
+    },
 
-        result.push({
-          name,
-          servers: serverCards,
-          unassignedEdges,
-          totalEdges: edges.length,
-        });
-      }
-      result.sort((a, b) => a.name.localeCompare(b.name));
-      return result;
+    hasModel(d) {
+      return !!(d && d.current_model && String(d.current_model).trim() !== '');
     },
 
     badgeClass(status) {

@@ -6,6 +6,7 @@
   <title>StreamBed Controller</title>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <style>
+    [x-cloak] { display: none !important; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #222; }
 
@@ -169,50 +170,170 @@
     .edge-row .meta { font-size: 0.76rem; color: #777; display: flex; gap: 6px; flex-wrap: wrap; }
     .edge-row .deploy-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
     .empty-edges { font-size: 0.82rem; color: #aaa; font-style: italic; padding: 6px 4px; }
-  </style>
+
+    .search-wrap { position: relative; max-width: 480px; margin: 0 auto 24px; }
+    .header-search { position: relative; width: 320px; }
+    .header-search .search-input {
+      padding: 6px 10px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      background: #fff;
+      color: #222;
+    }
+    .header-search .search-input::placeholder { color: #777; font-weight: 600; }
+    .header-search .search-input:focus { border-color: #4a6cf7; }
+    .header-search .search-dropdown { color: #222; }
+    .header-search .search-item { font-weight: 600; }
+
+    .badge-no-model { background: #e6d9ff; color: #4b1e9e; }
+    .search-input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      background: #fff;
+    }
+    .search-input:focus { outline: none; border-color: #4a6cf7; box-shadow: 0 0 0 3px #4a6cf733; }
+    .search-dropdown {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      margin-top: 4px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      max-height: 280px;
+      overflow-y: auto;
+      z-index: 100;
+    }
+    .search-item {
+      padding: 8px 14px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    .search-item:hover { background: #f0f4ff; }
+    .search-empty { padding: 8px 14px; font-size: 0.85rem; color: #999; font-style: italic; }
+    .landing { text-align: center; padding: 60px 20px; color: #555; }
+    .landing h2 { font-size: 1.2rem; margin-bottom: 12px; font-weight: 600; }
+    .landing p { font-size: 0.9rem; color: #888; margin-bottom: 24px; }
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      font-size: 0.9rem;
+    }
+    .breadcrumb a { color: #4a6cf7; text-decoration: none; cursor: pointer; }
+    .breadcrumb a:hover { text-decoration: underline; }
+    .breadcrumb .sep { color: #aaa; }
+    .breadcrumb .current { font-weight: 600; }
+</style>
 </head>
 <body x-data="app()" x-init="init()">
 
 <header>
   <h1>StreamBed Controller</h1>
+  <div class="header-search" x-show="selectedCluster" @click.outside="showDropdown = false" x-cloak>
+    <input
+      class="search-input"
+      x-model="query"
+      @focus="showDropdown = true"
+      @input="showDropdown = true"
+      @keydown.enter.prevent="submitSearch()"
+      placeholder="Switch cluster..." />
+    <div class="search-dropdown" x-show="showDropdown && query.trim() !== ''" x-cloak>
+      <template x-if="filteredClusters.length === 0">
+        <div class="search-empty">No clusters match "<span x-text="query"></span>"</div>
+      </template>
+      <template x-for="name in filteredClusters" :key="name">
+        <div class="search-item" @click="selectCluster(name)" x-text="name"></div>
+      </template>
+    </div>
+  </div>
   <span class="refresh-info" x-text="lastRefresh"></span>
 </header>
 
 <main>
-  <div class="section-actions">
-    <button class="btn btn-primary btn-sm" @click="refresh()">Refresh</button>
-    <span>Auto-refresh: 10s</span>
-  </div>
-
-  <template x-if="error">
-    <p class="empty" x-text="'Error: ' + error"></p>
+  <!-- Landing view: search only -->
+  <template x-if="!selectedCluster">
+    <div>
+      <div class="landing">
+        <h2>Select an Active Cluster</h2>
+        <p>Type a cluster name to view its devices.</p>
+      </div>
+      <div class="search-wrap" @click.outside="showDropdown = false">
+        <input
+          class="search-input"
+          x-model="query"
+          @focus="showDropdown = true"
+          @input="showDropdown = true"
+          @keydown.enter.prevent="submitSearch()"
+          placeholder="Search clusters by prefix..."
+          autofocus />
+        <div class="search-dropdown" x-show="showDropdown" x-cloak>
+          <template x-if="filteredClusters.length === 0">
+            <div class="search-empty">No clusters match "<span x-text="query"></span>"</div>
+          </template>
+          <template x-for="name in filteredClusters" :key="name">
+            <div class="search-item" @click="selectCluster(name)" x-text="name"></div>
+          </template>
+        </div>
+      </div>
+      <template x-if="error">
+        <p class="empty" x-text="'Error: ' + error" style="text-align:center"></p>
+      </template>
+    </div>
   </template>
 
-  <template x-if="!error && clusters.length === 0">
-    <p class="empty">No devices found. Are any devices registered?</p>
-  </template>
-
-  <template x-for="cluster in clusters" :key="cluster.name">
-    <div class="cluster-card">
-      <div class="cluster-header">
-        Cluster: <span x-text="cluster.name"></span>
-        &nbsp;<small style="color:#888;font-weight:400">
-          (<span x-text="cluster.servers.length"></span> server<span x-text="cluster.servers.length === 1 ? '' : 's'"></span>,
-          <span x-text="cluster.totalEdges"></span> edge<span x-text="cluster.totalEdges === 1 ? '' : 's'"></span>)
-        </small>
+  <!-- Cluster detail view -->
+  <template x-if="selectedCluster">
+    <div>
+      <div class="section-actions">
+        <button class="btn btn-primary btn-sm" @click="refresh()">Refresh</button>
+        <span>Auto-refresh: 10s</span>
       </div>
 
-      <div class="server-grid">
+      <template x-if="error">
+        <p class="empty" x-text="'Error: ' + error"></p>
+      </template>
+
+      <template x-if="!error && cluster && cluster.servers.length === 0 && cluster.unassignedEdges.length === 0">
+        <p class="empty">No devices found in this cluster.</p>
+      </template>
+
+      <template x-if="cluster">
+        <div class="cluster-card">
+          <div class="cluster-header">
+            Cluster: <span x-text="cluster.name"></span>
+            &nbsp;<small style="color:#888;font-weight:400">
+              (<span x-text="cluster.servers.length"></span> server<span x-text="cluster.servers.length === 1 ? '' : 's'"></span>,
+              <span x-text="cluster.totalEdges"></span> edge<span x-text="cluster.totalEdges === 1 ? '' : 's'"></span>)
+            </small>
+          </div>
+
+          <div class="server-grid">
         <!-- One card per server -->
         <template x-for="srv in cluster.servers" :key="srv.device.device_id">
           <div class="server-card">
             <div class="server-head">
               <div>
                 <span class="server-id" x-text="srv.device.device_id"></span>
-                <span class="badge" :class="badgeClass(srv.device.status)" x-text="srv.device.status || 'Unknown'"></span>
+                <template x-if="hasModel(srv.device)">
+                  <span class="badge" :class="badgeClass(srv.device.status)" x-text="srv.device.status || 'Unknown'"></span>
+                </template>
+                <template x-if="!hasModel(srv.device)">
+                  <span class="badge badge-no-model">No Model Deployed</span>
+                </template>
               </div>
               <div class="meta">
-                <div>Model: <span x-text="srv.device.current_model || '—'"></span></div>
+                <template x-if="hasModel(srv.device)">
+                  <div>Model: <span x-text="srv.device.current_model"></span></div>
+                </template>
                 <div>Heartbeat: <span x-text="fmtTime(srv.device.last_heartbeat)"></span></div>
               </div>
               <div class="deploy-row">
@@ -233,11 +354,19 @@
                 <div class="edge-row">
                   <div class="edge-head">
                     <span x-text="e.device_id" class="edge-id"></span>
-                    <span class="badge" :class="badgeClass(e.status)" x-text="e.status || 'Unknown'"></span>
+                    <template x-if="hasModel(e)">
+                      <span class="badge" :class="badgeClass(e.status)" x-text="e.status || 'Unknown'"></span>
+                    </template>
+                    <template x-if="!hasModel(e)">
+                      <span class="badge badge-no-model">No Model Deployed</span>
+                    </template>
                   </div>
                   <div class="meta">
-                    <span>Model: <span x-text="e.current_model || '—'"></span></span>
-                    <span>· HB: <span x-text="fmtTime(e.last_heartbeat)"></span></span>
+                    <template x-if="hasModel(e)">
+                      <span>Model: <span x-text="e.current_model"></span></span>
+                    </template>
+                    <span x-show="hasModel(e)">·</span>
+                    <span>HB: <span x-text="fmtTime(e.last_heartbeat)"></span></span>
                     <span x-show="e._routeUpdated">· routed: <span x-text="fmtTime(e._routeUpdated)"></span></span>
                   </div>
                   <div class="deploy-row">
@@ -264,11 +393,19 @@
                 <div class="edge-row">
                   <div class="edge-head">
                     <span x-text="e.device_id" class="edge-id"></span>
-                    <span class="badge" :class="badgeClass(e.status)" x-text="e.status || 'Unknown'"></span>
+                    <template x-if="hasModel(e)">
+                      <span class="badge" :class="badgeClass(e.status)" x-text="e.status || 'Unknown'"></span>
+                    </template>
+                    <template x-if="!hasModel(e)">
+                      <span class="badge badge-no-model">No Model Deployed</span>
+                    </template>
                   </div>
                   <div class="meta">
-                    <span>Model: <span x-text="e.current_model || '—'"></span></span>
-                    <span>· HB: <span x-text="fmtTime(e.last_heartbeat)"></span></span>
+                    <template x-if="hasModel(e)">
+                      <span>Model: <span x-text="e.current_model"></span></span>
+                    </template>
+                    <span x-show="hasModel(e)">·</span>
+                    <span>HB: <span x-text="fmtTime(e.last_heartbeat)"></span></span>
                   </div>
                   <div class="deploy-row">
                     <input class="model-input" x-model="e._newImage" placeholder="user/repo:tag" />
@@ -281,7 +418,9 @@
             </div>
           </div>
         </template>
-      </div>
+          </div>
+        </div>
+      </template>
     </div>
   </template>
 </main>

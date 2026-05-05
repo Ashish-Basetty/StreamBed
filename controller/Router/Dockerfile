@@ -2,13 +2,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Copy application code
-COPY . .
+COPY controller/Router/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install dependencies (add to requirements.txt as needed)
-RUN pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
+COPY controller/Router/ .
+COPY frontend/ /app/frontend/
 
-# Expose router port
-EXPOSE 80
+EXPOSE 8090
+
+VOLUME ["/app/data"]
 
 CMD ["python", "main.py"]

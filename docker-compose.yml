@@ -25,6 +25,23 @@ services:
     networks:
       - streambed-net
 
+  router:
+    build:
+      context: .
+      dockerfile: controller/Router/Dockerfile
+    image: ashishbasetty/streambed-router:latest
+    container_name: streambed-router
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./controller/router-data:/app/data
+    environment:
+      - ROUTER_ADMIN_TOKEN=${ROUTER_ADMIN_TOKEN:-dev-token}
+    depends_on:
+      - controller
+    networks:
+      - streambed-net
+
   # --- Edge daemons (each manages an edge container) ---
   daemon-edge1:
     build:

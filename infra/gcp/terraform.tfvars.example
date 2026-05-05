@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is gitignored.
+project_id        = "your-gcp-project-id"
+your_home_ip_cidr = "1.2.3.4/32"   # `curl ifconfig.me`, then append /32
+
+# Optional overrides — defaults are fine to start.
+# region                   = "us-central1"
+# zone                     = "us-central1-a"
+# cluster_name             = "gcp-test"
+# controller_machine_type  = "e2-micro"
+# edge_machine_type        = "e2-micro"
+# server_machine_type      = "e2-small"

@@ -19,6 +19,16 @@ var (
 	// stream and never escapes the sidecar — it feeds the edge's bandwidth
 	// composite estimator directly.
 	TagFBCK = [4]byte{'F', 'B', 'C', 'K'}
+	// TagCSTL ("CSTM lossy") marks application-defined payloads that the
+	// sidecar policy MAY drop under bandwidth pressure. Used by StreamBed
+	// users (e.g. RL agents, telemetry) for bulk best-effort data alongside
+	// CHNK. Treated identically to CHNK by the policy.
+	TagCSTL = [4]byte{'C', 'S', 'T', 'L'}
+	// TagCSTR ("CSTM reliable") marks application-defined payloads that
+	// MUST arrive. Used for small, high-priority app messages (e.g. advisor
+	// advice, control commands) alongside EMBD. Treated identically to EMBD
+	// by the policy.
+	TagCSTR = [4]byte{'C', 'S', 'T', 'R'}
 )
 
 // MaxDatagramPayload is the largest payload we will hand to QUIC as a datagram.
@@ -33,10 +43,10 @@ const ControlStreamLabel = "streambed.control.v1"
 // carries the payload (datagram vs control stream), and whether the policy
 // is allowed to drop it under pressure.
 //
-//   KindLossyData   = CHNK = datagram, droppable
-//   KindLosslessData = EMBD = datagram, NEVER droppable
-//   KindControl     = RATE/ACTN/FBCK = control stream, NEVER droppable
-//   KindUnknown     = unrecognized 4-byte tag
+//   KindLossyData    = CHNK / CSTL = datagram, droppable
+//   KindLosslessData = EMBD / CSTR = datagram, NEVER droppable
+//   KindControl      = RATE/ACTN/FBCK = control stream, NEVER droppable
+//   KindUnknown      = unrecognized 4-byte tag
 //
 // Channel routing in pumpUDPToQUIC groups Lossy + Lossless onto datagrams and
 // Control onto the stream. The policy checks specifically for KindLossyData
@@ -58,9 +68,9 @@ func ClassifyPrefix(p []byte) PacketKind {
 	var t [4]byte
 	copy(t[:], p[:4])
 	switch t {
-	case TagCHNK:
+	case TagCHNK, TagCSTL:
 		return KindLossyData
-	case TagEMBD:
+	case TagEMBD, TagCSTR:
 		return KindLosslessData
 	case TagRATE, TagACTN, TagFBCK:
 		return KindControl

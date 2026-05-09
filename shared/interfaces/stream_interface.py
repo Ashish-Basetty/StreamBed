@@ -15,7 +15,13 @@ import cv2
 import numpy as np
 
 
-from shared.stream_chunks import CHUNK_MAGIC, EMBED_MAGIC, make_chunks as _make_chunks_impl
+from shared.stream_chunks import (
+    CHUNK_MAGIC,
+    EMBED_MAGIC,
+    CSTM_LOSSY_MAGIC,
+    CSTM_RELIABLE_MAGIC,
+    make_chunks as _make_chunks_impl,
+)
 
 JPEG_MAGIC = b'JPEG'
 
@@ -275,6 +281,33 @@ class StreamBedUDPSender(StreamSenderInterface):
             print(f"[UDPSender] failed to send frame: {e}")
             return False
 
+    async def send_custom(self, payload: bytes, reliable: bool = True) -> bool:
+        """Send arbitrary application bytes through the sidecar.
+
+        reliable=True (default) → CSTR tag. The sidecar policy must deliver
+        these even under bandwidth pressure. Use for small priority messages
+        like advisor advice or app commands.
+
+        reliable=False → CSTL tag. The sidecar policy MAY drop these under
+        bandwidth pressure. Use for bulk best-effort data like extra
+        telemetry or supplementary video.
+
+        Payloads larger than the chunk size are split across datagrams and
+        reassembled receiver-side using a per-call stream_id.
+        """
+        if not self._transport or not self._server_addr:
+            raise RuntimeError("sender is not connected")
+        tag = CSTM_RELIABLE_MAGIC if reliable else CSTM_LOSSY_MAGIC
+        try:
+            stream_id = os.urandom(16)
+            for chunk in _make_chunks(stream_id, payload, tag=tag):
+                self._transport.sendto(chunk)
+                await asyncio.sleep(self._chunk_delay)
+            return True
+        except Exception as e:
+            print(f"[UDPSender] failed to send custom payload: {e}")
+            return False
+
     async def close(self) -> None:
         if self._transport:
             self._transport.close()
@@ -291,6 +324,7 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
         self._transport = None
         self._protocol = None
         self._queue: Optional[asyncio.Queue] = None
+        self._custom_queue: Optional[asyncio.Queue] = None
         self._stopped = False
         self._on_bytes_received = on_bytes_received
         self._on_datagram_received = on_datagram_received
@@ -299,11 +333,13 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
         def __init__(
             self,
             queue: asyncio.Queue,
+            custom_queue: asyncio.Queue,
             on_bytes_received: Optional[Callable[[int], None]] = None,
             on_datagram_received: Optional[Callable[[bytes, tuple], None]] = None,
         ):
             super().__init__()
             self._queue = queue
+            self._custom_queue = custom_queue
             self._reassembly: dict = {}
             self._on_bytes_received = on_bytes_received
             self._on_datagram_received = on_datagram_received
@@ -322,7 +358,9 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
             except Exception:
                 pass
 
-            if data[:4] in (CHUNK_MAGIC, EMBED_MAGIC):
+            tag = data[:4] if len(data) >= 4 else b""
+
+            if tag in (CHUNK_MAGIC, EMBED_MAGIC):
                 # CHNK and EMBD share identical chunk framing; the only
                 # difference is the policy hint to the sidecar. Reassembly
                 # is keyed by stream_id, which is unique per send() call —
@@ -340,6 +378,23 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
                     print(f"[UDPReceiver] chunk error: {e}")
                 return
 
+            if tag in (CSTM_LOSSY_MAGIC, CSTM_RELIABLE_MAGIC):
+                # CSTL/CSTR carry application-defined bytes. Reassemble using
+                # the same chunk framing, then deliver the raw payload to the
+                # custom queue along with the originating tag so the app can
+                # tell apart lossy vs reliable arrivals.
+                try:
+                    stream_id, chunk_index, total_chunks, chunk_data = _parse_chunk(data)
+                    if stream_id not in self._reassembly:
+                        self._reassembly[stream_id] = [None] * total_chunks
+                    self._reassembly[stream_id][chunk_index] = chunk_data
+                    if all(c is not None for c in self._reassembly[stream_id]):
+                        payload = b''.join(self._reassembly.pop(stream_id))
+                        asyncio.create_task(self._custom_queue.put((tag, payload)))
+                except Exception as e:
+                    print(f"[UDPReceiver] custom chunk error: {e}")
+                return
+
             try:
                 frame = deserialize_stream_frame(data)
                 if isinstance(frame, StreamFrame):
@@ -350,9 +405,13 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
     async def listen(self, host: str, port: int) -> None:
         loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue()
+        self._custom_queue = asyncio.Queue()
         self._transport, self._protocol = await loop.create_datagram_endpoint(
             lambda: StreamBedUDPReceiver._RecvProtocol(
-                self._queue, self._on_bytes_received, self._on_datagram_received
+                self._queue,
+                self._custom_queue,
+                self._on_bytes_received,
+                self._on_datagram_received,
             ),
             local_addr=(host, port),
         )
@@ -381,6 +440,24 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
         except asyncio.TimeoutError:
             return None
 
+    async def recv_custom(
+        self, timeout: float | None = None
+    ) -> tuple[bytes, bytes] | None:
+        """Dequeue one CSTM payload sent via send_custom().
+
+        Returns (tag, bytes) where tag is CSTL or CSTR — the app can tell
+        whether this arrived on the lossy or the reliable channel. Returns
+        None on timeout.
+        """
+        if self._custom_queue is None:
+            raise RuntimeError("receiver.listen must be called before recv_custom")
+        try:
+            if timeout is None:
+                return await self._custom_queue.get()
+            return await asyncio.wait_for(self._custom_queue.get(), timeout)
+        except asyncio.TimeoutError:
+            return None
+
     def get_local_port(self) -> int | None:
         """Public accessor for the receiver's bound port."""
         if self._transport is None:
@@ -401,6 +478,10 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
             while not self._queue.empty():
                 _ = self._queue.get_nowait()
             self._queue = None
+        if self._custom_queue:
+            while not self._custom_queue.empty():
+                _ = self._custom_queue.get_nowait()
+            self._custom_queue = None
 
 
 class StreamBedUDPServerReceiver(StreamBedUDPReceiver):

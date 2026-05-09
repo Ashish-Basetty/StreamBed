@@ -1,0 +1,9 @@
+[shared] loading teacher=teacher.zip
+[shared] teacher features_dim = 512
+[shared] collecting 50000 (frame, teacher_action) pairs
+  collected 5000/50000 (239/s)
+  collected 10000/50000 (236/s)
+  collected 15000/50000 (238/s)
+  collected 20000/50000 (240/s)
+  collected 25000/50000 (246/s)
+  collected 30000/50000 (246/s)

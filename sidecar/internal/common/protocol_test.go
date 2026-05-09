@@ -13,6 +13,8 @@ func TestClassifyPrefix(t *testing.T) {
 		{"rate", []byte("RATE{...}"), KindControl},
 		{"actn", []byte("ACTN{...}"), KindControl},
 		{"fbck", []byte("FBCK\x00\x00\x00\x00\x00\x00\x00\x00"), KindControl},
+		{"cstl", []byte("CSTLxxxx"), KindLossyData},
+		{"cstr", []byte("CSTRxxxx"), KindLosslessData},
 		{"unknown-json", []byte(`{"hello":1}`), KindUnknown},
 		{"empty", []byte(""), KindUnknown},
 		{"short", []byte("CHN"), KindUnknown},

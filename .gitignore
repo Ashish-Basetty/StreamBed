@@ -23,3 +23,8 @@ tests/logs/
 # virtual environments
 venv/
 .env
+
+# experiment weights
+
+# Zip archives
+*.zip

@@ -1,0 +1,15 @@
+{
+  "offline": {
+    "n": 10000,
+    "argmax_acc": 0.6449,
+    "top3_acc": 0.8952
+  },
+  "crafter": {
+    "episodes": 30,
+    "crafter_score": 2.570052417985039,
+    "avg_unlocks_per_ep": 4.266666666666667,
+    "avg_return": 3.3666666666666654
+  },
+  "n_params": 2137,
+  "feat_dim": 512
+}

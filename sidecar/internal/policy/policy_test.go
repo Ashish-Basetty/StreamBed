@@ -96,3 +96,30 @@ func TestRateLimit_NoEstimateMeansAllow(t *testing.T) {
 		t.Fatal("zero-target estimator should not drop")
 	}
 }
+
+func TestRateLimit_CSTL_DroppableLikeCHNK(t *testing.T) {
+	// CSTL is the user-facing lossy tag. Policy must treat it identically
+	// to CHNK — eligible for drop when the bucket is empty.
+	p := NewRateLimit(fixedEstimator(80), 0)
+	cstl := func(n int) []byte {
+		out := make([]byte, n)
+		copy(out[:4], common.TagCSTL[:])
+		return out
+	}
+	if got := p.OnEgress(cstl(10)); got == nil {
+		t.Fatal("burst-sized CSTL should fit")
+	}
+	if got := p.OnEgress(cstl(100)); got != nil {
+		t.Fatal("oversized CSTL was not dropped")
+	}
+}
+
+func TestRateLimit_CSTR_NeverDropped(t *testing.T) {
+	// CSTR is the user-facing reliable tag. Policy must never drop it,
+	// matching EMBD.
+	p := NewRateLimit(fixedEstimator(80), 0)
+	_ = p.OnEgress(chnk(10)) // drain
+	if got := p.OnEgress(control(common.TagCSTR, 5_000)); got == nil {
+		t.Fatal("CSTR payload was dropped — reliable user data must never drop")
+	}
+}

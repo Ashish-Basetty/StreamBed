@@ -1,14 +1,20 @@
 """Lightweight chunk helpers for StreamBed protocol. No cv2, no numpy.
 
-Two tag spaces ride the same chunked datagram format:
+Four tag spaces ride the same chunked datagram format:
 
   CHNK — raw video / lossy bulk data. Eligible for sidecar-policy drop.
   EMBD — embedding / lossless bulk data. Sidecar policy must NOT drop.
+  CSTL — application-defined lossy data. Treated like CHNK by the policy.
+  CSTR — application-defined reliable data. Treated like EMBD by the policy.
 
-Both produce identical wire framing (tag + stream_id + chunk metadata + data);
-the receiver picks reassembly buckets independently per stream_id, so the two
-streams don't collide even if they ever shared an id (urandom makes that
-practically impossible anyway).
+The CSTL/CSTR pair is StreamBed's generic extension point: any user app
+can ship arbitrary bytes through the sidecar with explicit reliability
+intent, without having to invent a new wire-format tag. The advisor
+experiment uses CSTR for advice payloads.
+
+All four produce identical wire framing (tag + stream_id + chunk metadata
++ data); the receiver picks reassembly buckets independently per stream_id,
+so the spaces don't collide.
 """
 
 import math
@@ -17,6 +23,8 @@ import struct
 
 CHUNK_MAGIC = b"CHNK"
 EMBED_MAGIC = b"EMBD"
+CSTM_LOSSY_MAGIC = b"CSTL"
+CSTM_RELIABLE_MAGIC = b"CSTR"
 # Sized for QUIC datagram path: path MTU (~1500) - IP/UDP (~28) - QUIC framing (~30) - chunk header (32) leaves headroom.
 CHUNK_SIZE = 1200
 

@@ -27,6 +27,14 @@ def make_stream_frame(timestamp, frame_id):
 
 
 async def _collect_frames(n, sender_fn):
+    """Collect `n` *logical* StreamFrames.
+
+    Each logical frame the sender hands to `StreamBedUDPSender.send` is split
+    on the wire into one CHNK (frame-only) and one EMBD (embedding-only)
+    message. This helper waits for both halves of each logical frame and
+    merges them by (source_device_id, timestamp), so callers can keep
+    asserting on whole frames as if the split didn't happen.
+    """
     receiver = StreamBedUDPReceiver()
     await receiver.listen("127.0.0.1", 0)
     port = receiver.get_local_port()
@@ -35,16 +43,37 @@ async def _collect_frames(n, sender_fn):
     await sender.connect("127.0.0.1", port)
     await sender_fn(sender)
 
-    received = []
-    for _ in range(n):
-        frame = await receiver.recv_one(timeout=2.0)
-        if frame is None:
+    def _both_halves_present(sf: StreamFrame) -> bool:
+        return sf.frame is not None and sf.embedding is not None
+
+    by_key: dict = {}
+    deadline = asyncio.get_running_loop().time() + 5.0
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
             break
-        received.append(frame)
+        if len(by_key) >= n and all(_both_halves_present(sf) for sf in by_key.values()):
+            break
+        wire = await receiver.recv_one(timeout=min(2.0, remaining))
+        if wire is None:
+            break
+        key = (wire.source_device_id, wire.timestamp)
+        existing = by_key.get(key)
+        if existing is None:
+            by_key[key] = wire
+        else:
+            by_key[key] = StreamFrame(
+                timestamp=existing.timestamp,
+                frame=existing.frame if existing.frame is not None else wire.frame,
+                embedding=existing.embedding if existing.embedding is not None else wire.embedding,
+                model_version=existing.model_version,
+                source_device_id=existing.source_device_id,
+                frame_interleaving_rate=existing.frame_interleaving_rate,
+            )
 
     await sender.close()
     await receiver.stop()
-    return received
+    return list(by_key.values())
 
 
 def test_single_frame_lands_in_store(tmp_path):

@@ -121,24 +121,6 @@ async def stream_target_poll_loop():
         await asyncio.sleep(30)
 
 
-async def _feedback_send_loop():
-    """Push received_bps to stream source via UDP every 2 seconds."""
-    while True:
-        await asyncio.sleep(2.0)
-        addr = receiver.stream_source_addr
-        if addr is None:
-            continue
-        now = time.monotonic()
-        cutoff = now - 2.0
-        total_bits = sum(n * 8 for t, n in receiver.stream_received if t >= cutoff)
-        received_bps = total_bits / 2.0
-        payload = json.dumps({"received_bps": received_bps}).encode("utf-8")
-        try:
-            receiver.send_datagram(payload, addr)
-        except Exception:
-            pass
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("[Server] Loading model...")
@@ -149,19 +131,13 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(ttl_cleanup_loop())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
     stream_target_task = asyncio.create_task(stream_target_poll_loop())
-    feedback_task = asyncio.create_task(_feedback_send_loop())
 
     yield
 
     receive_task.cancel()
-    feedback_task.cancel()
     cleanup_task.cancel()
     heartbeat_task.cancel()
     stream_target_task.cancel()
-    try:
-        await feedback_task
-    except asyncio.CancelledError:
-        pass
     await receiver.stop()
 
 

@@ -2,7 +2,6 @@
 import asyncio
 import json
 import logging
-from typing import Callable
 
 import docker
 import httpx
@@ -11,7 +10,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
-from shared.bandwidth import CompositeBackend, SentRateBackend, ServerFeedbackBackend
+from shared.bandwidth import SentRateBackend
 from shared.utils import _deployment_hash, _get_docker, _get_network
 
 from daemon_config import (
@@ -25,7 +24,6 @@ from daemon_config import (
     DEVICE_ID,
     DEVICE_TYPE,
     MAX_FRAME_PAYLOAD_BYTES,
-    SIDECAR_FEEDBACK_PORT,
     SIDECAR_IMAGE,
     SIDECAR_LOCAL_UDP_PORT,
     SIDECAR_PEER_ADDRESS,
@@ -131,14 +129,11 @@ async def _bandwidth_poll_loop(manager: StreamProxyManager) -> None:
         await asyncio.sleep(BANDWIDTH_POLL_INTERVAL)
 
 
-async def _run_stream_tcp_server(
-    manager: StreamProxyManager,
-    on_feedback_received: Callable[[dict], None] | None = None,
-) -> None:
+async def _run_stream_tcp_server(manager: StreamProxyManager) -> None:
     """Start TCP server for edge connections and UDP transport for forwarding. Edge daemons only."""
     loop = asyncio.get_running_loop()
     udp_transport, _ = await loop.create_datagram_endpoint(
-        lambda: _UDPSendOnlyProtocol(on_feedback_received=on_feedback_received),
+        lambda: _UDPSendOnlyProtocol(),
         local_addr=("0.0.0.0", 0),
     )
     manager.set_udp_transport(udp_transport)
@@ -215,7 +210,6 @@ def _spawn_sidecar_for_role() -> bool:
             image=SIDECAR_IMAGE,
             peer_address=SIDECAR_PEER_ADDRESS or None,
             local_udp_bind=f"0.0.0.0:{SIDECAR_LOCAL_UDP_PORT}",
-            daemon_address=f"{DAEMON_ADDRESS}:{SIDECAR_FEEDBACK_PORT}",
             quic_bind=f"0.0.0.0:{SIDECAR_QUIC_BIND_PORT}",
             local_server_udp=f"127.0.0.1:{STREAM_PROXY_PORT}",
         )
@@ -229,17 +223,14 @@ async def lifespan(app: FastAPI):
     poll_task = None
     proxy_task = None
     bandwidth_task = None
-    server_feedback = None
     stream_proxy_manager = StreamProxyManager()
     if DEVICE_TYPE == "edge":
-        sent_rate = SentRateBackend()
-        server_feedback = ServerFeedbackBackend(default_bps=500_000)
-        stream_proxy_manager.set_estimator(CompositeBackend(sent_rate, server_feedback))
+        # Edge owns the rate decision. Sole input is locally-observed throughput;
+        # QUIC's congestion control closes the loop at the transport layer, so
+        # received_bps app-feedback was redundant and is gone.
+        stream_proxy_manager.set_estimator(SentRateBackend())
         poll_task = asyncio.create_task(_stream_proxy_target_poll_loop(stream_proxy_manager))
-        feedback_cb = server_feedback.update_from_response
-        proxy_task = asyncio.create_task(
-            _run_stream_tcp_server(stream_proxy_manager, on_feedback_received=feedback_cb)
-        )
+        proxy_task = asyncio.create_task(_run_stream_tcp_server(stream_proxy_manager))
         bandwidth_task = asyncio.create_task(_bandwidth_poll_loop(stream_proxy_manager))
 
     yield

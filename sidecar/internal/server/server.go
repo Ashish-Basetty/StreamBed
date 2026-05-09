@@ -4,6 +4,10 @@
 //
 // Receives QUIC datagrams + control-stream messages and re-emits them as UDP
 // to the local server inference container, which is unmodified.
+//
+// There is no reverse path today: the server emits no feedback. If RATE/ACTN
+// or future server->edge messages get a producer, add a pump here that reads
+// from a server-local UDP listener and calls conn.SendControl().
 package server
 
 import (
@@ -54,11 +58,15 @@ func Run(ctx context.Context, cfg Config) error {
 			return err
 		}
 		log.Printf("server: peer connected")
-		go handlePeer(ctx, conn, localAddr)
+		// NOTE: cfg.Metrics is currently shared across peers (set in main.go),
+		// so DatagramBytesRecv is the cluster-wide counter. With one peer this
+		// is fine; for true per-peer feedback we'd need ln.Accept(ctx, nil) and
+		// hold the new registry here. Left as a follow-up.
+		go handlePeer(ctx, conn, localAddr, cfg.Metrics.DatagramBytesRecv.Load)
 	}
 }
 
-func handlePeer(ctx context.Context, conn *quictransport.Conn, localAddr *net.UDPAddr) {
+func handlePeer(ctx context.Context, conn *quictransport.Conn, localAddr *net.UDPAddr, bytesRecv func() uint64) {
 	defer conn.Close()
 
 	out, err := net.DialUDP("udp", nil, localAddr)
@@ -68,18 +76,10 @@ func handlePeer(ctx context.Context, conn *quictransport.Conn, localAddr *net.UD
 	}
 	defer out.Close()
 
-	// Per-peer return path for feedback the server emits via UDP.
-	feedbackIn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
-	if err != nil {
-		log.Printf("server: feedback listen: %v", err)
-		return
-	}
-	defer feedbackIn.Close()
-
 	errc := make(chan error, 3)
 	go func() { errc <- pumpDatagramsToUDP(ctx, conn, out) }()
 	go func() { errc <- pumpControlToUDP(ctx, conn, out) }()
-	go func() { errc <- pumpFeedbackToQUIC(ctx, feedbackIn, conn) }()
+	go func() { errc <- pumpFeedback(ctx, conn, bytesRecv) }()
 
 	select {
 	case <-ctx.Done():
@@ -112,25 +112,6 @@ func pumpControlToUDP(ctx context.Context, conn *quictransport.Conn, out *net.UD
 		}
 		if _, err := out.Write(msg); err != nil {
 			log.Printf("server: control->udp write: %v", err)
-		}
-	}
-}
-
-// pumpFeedbackToQUIC reads UDP packets the server container emits (e.g. the
-// 2-second `received_bps` JSON heartbeat) and pushes them back over the
-// control stream to the edge.
-func pumpFeedbackToQUIC(ctx context.Context, in *net.UDPConn, conn *quictransport.Conn) error {
-	buf := make([]byte, 65535)
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		n, _, err := in.ReadFromUDP(buf)
-		if err != nil {
-			return err
-		}
-		if err := conn.SendControl(buf[:n]); err != nil {
-			log.Printf("server: feedback over control: %v", err)
 		}
 	}
 }

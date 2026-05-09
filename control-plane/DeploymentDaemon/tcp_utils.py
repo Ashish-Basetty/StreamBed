@@ -1,10 +1,8 @@
 """TCP stream handling for StreamBed daemon."""
 
 import asyncio
-import json
 import logging
 import struct
-from typing import Callable
 
 from stream_proxy_manager import StreamProxyManager
 
@@ -12,20 +10,11 @@ logger = logging.getLogger(__name__)
 
 
 class _UDPSendOnlyProtocol(asyncio.DatagramProtocol):
-    """UDP transport for forwarding stream. Receives feedback packets from server."""
-
-    def __init__(self, on_feedback_received: Callable[[dict], None] | None = None):
-        self._on_feedback = on_feedback_received
+    """UDP transport for forwarding stream. Send-only — no return path."""
 
     def datagram_received(self, data: bytes, addr: tuple) -> None:
-        if not self._on_feedback:
-            return
-        try:
-            msg = json.loads(data.decode("utf-8"))
-            if isinstance(msg, dict) and "received_bps" in msg:
-                self._on_feedback(msg)
-        except Exception:
-            pass
+        # No reverse path today. RATE/ACTN producers can wire one in later.
+        pass
 
     def error_received(self, exc: Exception) -> None:
         pass

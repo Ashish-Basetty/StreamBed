@@ -51,7 +51,6 @@ SIDECAR_IMAGE = os.environ.get("SIDECAR_IMAGE", "ashishbasetty/streambed-quic-si
 SIDECAR_PEER_ADDRESS = os.environ.get("SIDECAR_PEER_ADDRESS", "")  # e.g. "server-sidecar:4433"
 SIDECAR_LOCAL_UDP_PORT = int(os.environ.get("SIDECAR_LOCAL_UDP_PORT", "9050"))
 SIDECAR_QUIC_BIND_PORT = int(os.environ.get("SIDECAR_QUIC_BIND_PORT", "4433"))
-SIDECAR_FEEDBACK_PORT = int(os.environ.get("SIDECAR_FEEDBACK_PORT", "9051"))
 
 
 # Device Registration retry configuration

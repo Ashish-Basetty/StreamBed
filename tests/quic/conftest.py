@@ -173,7 +173,6 @@ def sidecar_pair_factory(sidecar_binary, tmp_path):
         server_quic = _free_udp_port()
         server_metrics = _free_port()
         server_local_udp = _free_udp_port()
-        daemon_feedback = _free_udp_port()
 
         server = SidecarProcess(
             sidecar_binary,
@@ -201,7 +200,6 @@ def sidecar_pair_factory(sidecar_binary, tmp_path):
                 env={
                     "PEER_ADDRESS": f"127.0.0.1:{server_quic}",
                     "LOCAL_UDP_BIND": f"127.0.0.1:{u_port}",
-                    "DAEMON_ADDRESS": f"127.0.0.1:{daemon_feedback}",
                     "METRICS_ADDR": f"127.0.0.1:{m_port}",
                 },
                 log_path=tmp_path / f"edge-{i}.log",

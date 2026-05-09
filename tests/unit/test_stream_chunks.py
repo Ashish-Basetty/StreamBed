@@ -5,7 +5,7 @@ import struct
 
 import pytest
 
-from shared.stream_chunks import CHUNK_MAGIC, CHUNK_SIZE, make_chunks
+from shared.stream_chunks import CHUNK_MAGIC, CHUNK_SIZE, EMBED_MAGIC, make_chunks
 
 pytestmark = pytest.mark.unit
 
@@ -57,3 +57,17 @@ def test_explicit_stream_id_threaded_through():
     chunks = make_chunks(b"abc" * 1000, stream_id=sid)
     for c in chunks:
         assert c[4:20] == sid
+
+
+def test_tag_threads_through_to_chunk_prefix():
+    """make_chunks(payload, tag=EMBED_MAGIC) prefixes each chunk with EMBD."""
+    payload = os.urandom(CHUNK_SIZE * 3 + 50)
+    chunks = make_chunks(payload, tag=EMBED_MAGIC)
+    assert len(chunks) >= 4
+    for c in chunks:
+        assert c[:4] == EMBED_MAGIC
+
+
+def test_invalid_tag_length_rejected():
+    with pytest.raises(ValueError):
+        make_chunks(b"data", tag=b"TOO_LONG")

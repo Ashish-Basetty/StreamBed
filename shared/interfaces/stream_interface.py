@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 
-from shared.stream_chunks import CHUNK_MAGIC, make_chunks as _make_chunks_impl
+from shared.stream_chunks import CHUNK_MAGIC, EMBED_MAGIC, make_chunks as _make_chunks_impl
 
 JPEG_MAGIC = b'JPEG'
 
@@ -108,8 +108,38 @@ def deserialize_stream_frame(data: bytes) -> StreamFrame:
     )
 
 
-def _make_chunks(stream_id: bytes, payload: bytes) -> list:
-    return _make_chunks_impl(payload, stream_id)
+def _make_chunks(stream_id: bytes, payload: bytes, tag: bytes = CHUNK_MAGIC) -> list:
+    return _make_chunks_impl(payload, stream_id, tag=tag)
+
+
+def _split_for_wire(frame: "StreamFrame") -> "list[tuple[bytes, StreamFrame]]":
+    """Split a StreamFrame carrying both halves into the per-tag pieces that
+    actually go on the wire. Returns a list of (tag, sub_frame) tuples.
+
+    A StreamFrame with both `frame` and `embedding` becomes two sub-frames:
+    one CHNK-tagged with frame-only, one EMBD-tagged with embedding-only.
+    Either-only inputs return a single piece. Empty inputs return [].
+    """
+    out: list[tuple[bytes, StreamFrame]] = []
+    if frame.frame is not None:
+        out.append((CHUNK_MAGIC, StreamFrame(
+            timestamp=frame.timestamp,
+            frame=frame.frame,
+            embedding=None,
+            model_version=frame.model_version,
+            source_device_id=frame.source_device_id,
+            frame_interleaving_rate=frame.frame_interleaving_rate,
+        )))
+    if frame.embedding is not None:
+        out.append((EMBED_MAGIC, StreamFrame(
+            timestamp=frame.timestamp,
+            frame=None,
+            embedding=frame.embedding,
+            model_version=frame.model_version,
+            source_device_id=frame.source_device_id,
+            frame_interleaving_rate=frame.frame_interleaving_rate,
+        )))
+    return out
 
 
 def _parse_chunk(data: bytes):
@@ -173,11 +203,21 @@ class StreamBedTCPSender(StreamSenderInterface):
         print(f"[TCPSender] connected to {server_host}:{server_port}")
 
     async def send(self, frame: StreamFrame) -> bool:
+        """Send each tag's worth of data as its own length-prefixed message.
+
+        A StreamFrame carrying both halves becomes two TCP messages: the
+        receiver (daemon TCP handler) processes each one independently and
+        derives the wire tag (CHNK vs EMBD) from which half is populated.
+        """
         if not self._writer:
             raise RuntimeError("sender is not connected")
         try:
-            payload = serialize_stream_frame(frame, self._use_jpeg)
-            self._writer.write(struct.pack(">I", len(payload)) + payload)
+            pieces = _split_for_wire(frame)
+            if not pieces:
+                return True
+            for _tag, sub in pieces:
+                payload = serialize_stream_frame(sub, self._use_jpeg)
+                self._writer.write(struct.pack(">I", len(payload)) + payload)
             await self._writer.drain()
             return True
         except Exception as e:
@@ -215,14 +255,21 @@ class StreamBedUDPSender(StreamSenderInterface):
         print(f"[UDPSender] handshake sent to {self._server_addr}")
 
     async def send(self, frame: StreamFrame) -> bool:
+        """Send each tag's worth of data as its own chunked stream.
+
+        Frame-only piece → CHNK-tagged chunks (droppable by sidecar policy).
+        Embedding-only piece → EMBD-tagged chunks (never dropped).
+        Each piece gets its own stream_id so reassembly buckets stay disjoint.
+        """
         if not self._transport or not self._server_addr:
             raise RuntimeError("sender is not connected")
         try:
-            payload = serialize_stream_frame(frame, self._use_jpeg)
-            stream_id = os.urandom(16)
-            for chunk in _make_chunks(stream_id, payload):
-                self._transport.sendto(chunk)
-                await asyncio.sleep(self._chunk_delay)
+            for tag, sub in _split_for_wire(frame):
+                payload = serialize_stream_frame(sub, self._use_jpeg)
+                stream_id = os.urandom(16)
+                for chunk in _make_chunks(stream_id, payload, tag=tag):
+                    self._transport.sendto(chunk)
+                    await asyncio.sleep(self._chunk_delay)
             return True
         except Exception as e:
             print(f"[UDPSender] failed to send frame: {e}")
@@ -275,7 +322,11 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
             except Exception:
                 pass
 
-            if data[:4] == CHUNK_MAGIC:
+            if data[:4] in (CHUNK_MAGIC, EMBED_MAGIC):
+                # CHNK and EMBD share identical chunk framing; the only
+                # difference is the policy hint to the sidecar. Reassembly
+                # is keyed by stream_id, which is unique per send() call —
+                # so the two tag-spaces never collide on the receiver side.
                 try:
                     stream_id, chunk_index, total_chunks, chunk_data = _parse_chunk(data)
                     if stream_id not in self._reassembly:

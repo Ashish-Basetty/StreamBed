@@ -24,8 +24,11 @@ def make_frame(frame: np.ndarray | None = None, embedding: np.ndarray | None = N
 
 
 @pytest.mark.asyncio
-async def test_tcp_sender_send_receive():
-    """StreamBedTCPSender sends length-prefixed frames; receiver can parse them."""
+async def test_tcp_sender_splits_frame_and_embedding():
+    """A StreamFrame carrying both halves becomes two TCP messages: one
+    frame-only, one embedding-only. Receiver sees them as length-prefixed
+    payloads in arrival order.
+    """
     received_payloads = []
 
     async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -57,11 +60,52 @@ async def test_tcp_sender_send_receive():
     await server.wait_closed()
 
     await asyncio.sleep(0.05)
+    assert len(received_payloads) == 2
+
+    # Header is `>dIIdII` = timestamp, model_ver_len, source_id_len,
+    # interleaving, frame_len, embedding_len.
+    halves = []
+    for payload in received_payloads:
+        assert len(payload) >= 32
+        frame_len, embedding_len = struct.unpack_from(">II", payload, 24)
+        halves.append((frame_len, embedding_len))
+
+    # Exactly one frame-only and one embedding-only message, in either order.
+    has_frame_only = any(f > 0 and e == 0 for f, e in halves)
+    has_emb_only = any(f == 0 and e > 0 for f, e in halves)
+    assert has_frame_only, f"missing frame-only message in {halves}"
+    assert has_emb_only, f"missing embedding-only message in {halves}"
+
+
+@pytest.mark.asyncio
+async def test_tcp_sender_embedding_only_sends_one_message():
+    """A StreamFrame with frame=None sends just one (embedding-only) message."""
+    received_payloads = []
+
+    async def handle_client(reader, writer):
+        try:
+            while True:
+                len_buf = await reader.readexactly(4)
+                payload_len = struct.unpack(">I", len_buf)[0]
+                received_payloads.append(await reader.readexactly(payload_len))
+        except (asyncio.IncompleteReadError, ConnectionResetError):
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    server = await asyncio.start_server(handle_client, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    sender = StreamBedTCPSender()
+    await sender.connect("127.0.0.1", port)
+    await sender.send(make_frame(frame=None, embedding=np.random.rand(8).astype(np.float32)))
+    await sender.close()
+    server.close()
+    await server.wait_closed()
+    await asyncio.sleep(0.05)
     assert len(received_payloads) == 1
-    payload = received_payloads[0]
-    assert len(payload) >= 32
-    frame_len, embedding_len = struct.unpack_from(">II", payload, 24)
-    assert frame_len > 0
+    frame_len, embedding_len = struct.unpack_from(">II", received_payloads[0], 24)
+    assert frame_len == 0
     assert embedding_len > 0
 
 

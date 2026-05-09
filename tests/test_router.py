@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 # Make the router module importable directly.
-ROUTER_DIR = Path(__file__).resolve().parents[1] / "controller" / "Router"
+ROUTER_DIR = Path(__file__).resolve().parents[1] / "control-plane" / "Router"
 sys.path.insert(0, str(ROUTER_DIR))
 
 

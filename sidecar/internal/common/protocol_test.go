@@ -8,10 +8,12 @@ func TestClassifyPrefix(t *testing.T) {
 		in   []byte
 		want PacketKind
 	}{
-		{"chnk", []byte("CHNKxxxx"), KindData},
+		{"chnk", []byte("CHNKxxxx"), KindLossyData},
+		{"embd", []byte("EMBDxxxx"), KindLosslessData},
 		{"rate", []byte("RATE{...}"), KindControl},
 		{"actn", []byte("ACTN{...}"), KindControl},
-		{"json-feedback", []byte(`{"received_bps":1}`), KindControl},
+		{"fbck", []byte("FBCK\x00\x00\x00\x00\x00\x00\x00\x00"), KindControl},
+		{"unknown-json", []byte(`{"hello":1}`), KindUnknown},
 		{"empty", []byte(""), KindUnknown},
 		{"short", []byte("CHN"), KindUnknown},
 		{"random", []byte("\x00\x01\x02\x03..."), KindUnknown},

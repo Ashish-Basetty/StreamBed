@@ -20,7 +20,6 @@ func main() {
 	role := flag.String("role", env("SIDECAR_ROLE", "edge"), "edge|server")
 	peer := flag.String("peer", env("PEER_ADDRESS", ""), "peer sidecar address (edge role)")
 	localUDP := flag.String("local-udp", env("LOCAL_UDP_BIND", "0.0.0.0:9050"), "local UDP bind (edge role)")
-	daemon := flag.String("daemon", env("DAEMON_ADDRESS", "127.0.0.1:9051"), "where to send peer-originated feedback (edge role)")
 	bind := flag.String("bind", env("QUIC_BIND", "0.0.0.0:4433"), "QUIC bind (server role)")
 	localServer := flag.String("local-server", env("LOCAL_SERVER_UDP", "127.0.0.1:9000"), "server container UDP target (server role)")
 	metricsAddr := flag.String("metrics", env("METRICS_ADDR", ":9100"), "Prometheus metrics bind")
@@ -49,7 +48,6 @@ func main() {
 		err = edge.Run(ctx, edge.Config{
 			LocalUDPBind: *localUDP,
 			PeerAddr:     *peer,
-			DaemonAddr:   *daemon,
 			Metrics:      reg,
 		})
 	case "server":

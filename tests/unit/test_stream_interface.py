@@ -1,5 +1,6 @@
 import asyncio
 
+import numpy as np
 import pytest
 
 from shared.interfaces.stream_interface import StreamBedUDPSender, StreamBedUDPReceiver, StreamFrame
@@ -8,10 +9,13 @@ pytestmark = pytest.mark.unit
 
 
 def make_frame():
+    # A non-empty embedding ensures the sender produces at least one wire
+    # message after the CHNK/EMBD split (`_split_for_wire` returns [] when
+    # both halves are None).
     return StreamFrame(
         timestamp=123.45,
         frame=None,
-        embedding=None,
+        embedding=np.array([0.1, 0.2], dtype=np.float32),
         model_version="v1",
         source_device_id="device123",
         frame_interleaving_rate=30.0,

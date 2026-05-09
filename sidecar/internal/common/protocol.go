@@ -1,13 +1,24 @@
 // Package common holds wire constants shared between roles.
 package common
 
-// Magic prefixes on the StreamBed datagram protocol. The sidecar dispatches
-// on these to choose between the unreliable datagram channel and the reliable
-// control stream.
+// Tag prefixes on the StreamBed datagram protocol. The sidecar dispatches on
+// these to choose between the unreliable datagram channel and the reliable
+// control stream, and the egress policy uses them to decide droppability.
 var (
-	MagicCHNK = [4]byte{'C', 'H', 'N', 'K'}
-	MagicRATE = [4]byte{'R', 'A', 'T', 'E'}
-	MagicACTN = [4]byte{'A', 'C', 'T', 'N'}
+	// TagCHNK marks raw video / lossy bulk data. Rides QUIC datagrams. The
+	// policy is allowed to drop these under bandwidth pressure.
+	TagCHNK = [4]byte{'C', 'H', 'N', 'K'}
+	// TagEMBD marks embedding / lossless bulk data. Also rides QUIC datagrams,
+	// but the policy must NOT drop these — embeddings are inference output the
+	// system can't recreate.
+	TagEMBD = [4]byte{'E', 'M', 'B', 'D'}
+	TagRATE = [4]byte{'R', 'A', 'T', 'E'}
+	TagACTN = [4]byte{'A', 'C', 'T', 'N'}
+	// TagFBCK marks server-originated rate observations. Payload is an 8-byte
+	// big-endian uint64 of the smoothed received_bps. Travels on the control
+	// stream and never escapes the sidecar — it feeds the edge's bandwidth
+	// composite estimator directly.
+	TagFBCK = [4]byte{'F', 'B', 'C', 'K'}
 )
 
 // MaxDatagramPayload is the largest payload we will hand to QUIC as a datagram.
@@ -18,30 +29,40 @@ const MaxDatagramPayload = 1300
 // stream that carries RATE / ACTN messages. Length-prefixed framing on top.
 const ControlStreamLabel = "streambed.control.v1"
 
-// PacketKind is the routing decision after a 4-byte prefix peek.
+// PacketKind splits two orthogonal concerns at once: which QUIC primitive
+// carries the payload (datagram vs control stream), and whether the policy
+// is allowed to drop it under pressure.
+//
+//   KindLossyData   = CHNK = datagram, droppable
+//   KindLosslessData = EMBD = datagram, NEVER droppable
+//   KindControl     = RATE/ACTN/FBCK = control stream, NEVER droppable
+//   KindUnknown     = unrecognized 4-byte tag
+//
+// Channel routing in pumpUDPToQUIC groups Lossy + Lossless onto datagrams and
+// Control onto the stream. The policy checks specifically for KindLossyData
+// when deciding what to drop.
 type PacketKind int
 
 const (
-	KindUnknown PacketKind = iota
-	KindData               // CHNK -> QUIC datagram
-	KindControl            // RATE / ACTN -> reliable stream
+	KindUnknown      PacketKind = iota
+	KindLossyData                // CHNK
+	KindLosslessData             // EMBD
+	KindControl                  // RATE / ACTN / FBCK
 )
 
+// ClassifyPrefix peeks at the 4-byte tag and returns the kind.
 func ClassifyPrefix(p []byte) PacketKind {
 	if len(p) < 4 {
 		return KindUnknown
 	}
-	var m [4]byte
-	copy(m[:], p[:4])
-	switch m {
-	case MagicCHNK:
-		return KindData
-	case MagicRATE, MagicACTN:
-		return KindControl
-	}
-	// JSON {"received_bps": ...} from server is the legacy feedback shape; route
-	// it as control until the server is ported to RATE.
-	if p[0] == '{' {
+	var t [4]byte
+	copy(t[:], p[:4])
+	switch t {
+	case TagCHNK:
+		return KindLossyData
+	case TagEMBD:
+		return KindLosslessData
+	case TagRATE, TagACTN, TagFBCK:
 		return KindControl
 	}
 	return KindUnknown

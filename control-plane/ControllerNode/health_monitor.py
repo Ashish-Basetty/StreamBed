@@ -97,11 +97,16 @@ class HealthMonitor:
     async def _routing_tick(self) -> None:
         """One periodic pass over routing concerns.
 
-        Runs every `check_interval`. Two operations, in order:
+        Runs every `check_interval`. Three operations, in order:
           1. Failover: for every cluster, evaluate device states and trigger
              orphan + reassign on any server that is UNRESPONSIVE or has no
              deployment row.
-          2. Bulk stream-target sync (safety net): every
+          2. Periodic unrouted-edge reconcile: assign_unrouted_edges per
+             cluster. Self-heals any edge that ended up unrouted (registered
+             before any server had a deployment, post-stale-row cleanup,
+             etc.). Idempotent — does nothing if every edge already has a
+             routing row.
+          3. Bulk stream-target sync (safety net): every
              `stream_target_sync_interval`, re-push every routing row to its
              edge daemon. This catches any failover push that was lost and
              corrects state that may have drifted out-of-band.
@@ -111,6 +116,9 @@ class HealthMonitor:
             states = await self._evaluate_cluster(cluster)
             await self._process_cluster_health(cluster, states)
             self.prev_device_states.update(states)
+            # Reconcile unrouted edges. Replaces the lifespan-time backfill
+            # that used to pick servers[0] and produce unbalanced placements.
+            assign_unrouted_edges(cluster)
 
         now = datetime.utcnow()
         if (

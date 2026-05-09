@@ -26,7 +26,6 @@ def spawn_sidecar(
     image: str,
     peer_address: str | None,
     local_udp_bind: str,
-    daemon_address: str,
     quic_bind: str,
     local_server_udp: str,
 ) -> str | None:
@@ -53,7 +52,6 @@ def spawn_sidecar(
     env = {
         "SIDECAR_ROLE": role,
         "LOCAL_UDP_BIND": local_udp_bind,
-        "DAEMON_ADDRESS": daemon_address,
         "QUIC_BIND": quic_bind,
         "LOCAL_SERVER_UDP": local_server_udp,
         "DEVICE_ID": device_id,

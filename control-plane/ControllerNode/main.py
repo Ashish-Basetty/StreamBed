@@ -31,40 +31,11 @@ async def lifespan(app: FastAPI):
     global health_monitor
     init_db()
 
-    # Initialize routing table: assign each edge to the first available server in its cluster if not already present
-    conn = get_connection()
-    try:
-        clusters = conn.execute("SELECT DISTINCT device_cluster FROM devices").fetchall()
-        for row in clusters:
-            cluster = row[0]
-            devices = conn.execute(
-                "SELECT device_id, device_type FROM devices WHERE device_cluster=?",
-                (cluster,),
-            ).fetchall()
-            servers = [d[0] for d in devices if d[1] == 'server']
-            edges = [d[0] for d in devices if d[1] == 'edge']
-            if not servers:
-                continue
-            target_server = servers[0]
-            for edge in edges:
-                exists = conn.execute(
-                    "SELECT 1 FROM routing WHERE source_cluster=? AND source_device=?",
-                    (cluster, edge)
-                ).fetchone()
-                if not exists:
-                    conn.execute(
-                        """
-                        INSERT INTO routing (source_cluster, source_device, target_cluster, target_device, updated_at)
-                        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                        """,
-                        (cluster, edge, cluster, target_server)
-                    )
-                    logger.info(f"[INIT] Routing: {cluster}/{edge} -> {target_server}")
-        conn.commit()
-    except Exception as e:
-        logger.error(f"[INIT] Error initializing routing table: {e}")
-    finally:
-        conn.close()
+    # Routing assignment is reconciler-driven: the health monitor calls
+    # assign_unrouted_edges(cluster) every check_interval. No lifespan-time
+    # backfill — the prior implementation picked servers[0] non-deterministically
+    # and bypassed the deployment-presence filter, which produced unbalanced
+    # placements when servers came up in different orders.
 
     # Start health monitoring
     heartbeat_timeout = int(os.environ.get("HEARTBEAT_TIMEOUT_SECS", "30"))
@@ -243,6 +214,29 @@ def list_routing(device_cluster: str | None = None) -> dict:
                 "SELECT source_cluster, source_device, target_cluster, target_device, updated_at FROM routing"
             ).fetchall()
         return {"routing": [dict(row) for row in rows]}
+    finally:
+        conn.close()
+
+
+@app.delete("/routing")
+def clear_routing(device_cluster: str | None = None) -> dict:
+    """Wipe routing rows. Optional device_cluster scope, else all clusters.
+
+    Used by integration test fixtures to reset state between runs so a stale
+    row from a prior run can't poison load-balanced reassignment. The next
+    health-monitor tick will repopulate via assign_unrouted_edges.
+    """
+    conn = get_connection()
+    try:
+        if device_cluster:
+            cur = conn.execute(
+                "DELETE FROM routing WHERE source_cluster = ?",
+                (device_cluster,),
+            )
+        else:
+            cur = conn.execute("DELETE FROM routing")
+        conn.commit()
+        return {"ok": True, "deleted": cur.rowcount}
     finally:
         conn.close()
 

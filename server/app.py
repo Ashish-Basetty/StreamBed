@@ -1,8 +1,6 @@
 import asyncio
 import json
 import sys
-import time
-import uuid
 from pathlib import Path
 
 import httpx
@@ -12,7 +10,6 @@ from fastapi import FastAPI
 
 sys.path.insert(0, "/app")
 
-from shared.inference.mobilenet import MobileNetV2Model
 from shared.storage.frame_store import FrameStore
 from shared.storage.ttl_manager import TTLManager
 from shared.api.retrieval import create_retrieval_router
@@ -25,7 +22,6 @@ from server_config import (
     DEVICE_CLUSTER,
     DEVICE_ID,
     HEARTBEAT_INTERVAL,
-    MODEL_DEVICE,
     STORAGE_DIR,
     STREAM_LISTEN_HOST,
     STREAM_LISTEN_PORT,
@@ -33,11 +29,39 @@ from server_config import (
     TTL_MIN,
 )
 
-model = MobileNetV2Model(device=MODEL_DEVICE)
+# Server is now a passive sink: no inference, just stores whatever halves
+# arrive (frame from CHNK, embedding from EMBD) and merges them by
+# (source_device_id, timestamp). The edge runs the model; the server records.
+# When inference comes back to the server later, it reads from this same
+# store rather than running on the receive path.
+PASSTHROUGH_MODEL_VERSION = "passthrough"
+
 store = FrameStore(base_dir=STORAGE_DIR)
 ttl_mgr = TTLManager(storage_path=STORAGE_DIR, max_ttl=TTL_MAX, min_ttl=TTL_MIN)
 
 receiver = StreamBedUDPServerReceiver()
+
+
+def _frame_id(source_device_id: str, timestamp: float) -> str:
+    """Stable key per logical edge frame, so frame-only and embedding-only
+    halves merge into the same row."""
+    return f"{source_device_id}_{timestamp:.6f}"
+
+
+def store_from_stream_frame(target_store: FrameStore, stream_frame, ttl_seconds: float) -> None:
+    """Persist one half of a logical frame into `target_store`.
+
+    Free function (not a method) so tests can drive the server's exact
+    dispatch logic without standing up the FastAPI app.
+    """
+    target_store.store_partial(
+        frame_id=_frame_id(stream_frame.source_device_id, stream_frame.timestamp),
+        timestamp=stream_frame.timestamp,
+        frame=stream_frame.frame,
+        embedding=stream_frame.embedding,
+        model_version=stream_frame.model_version or None,
+        ttl_seconds=ttl_seconds,
+    )
 
 
 async def stream_receive_loop():
@@ -48,25 +72,12 @@ async def stream_receive_loop():
         src = stream_frame.source_device_id
         has_frame = stream_frame.frame is not None
         has_emb = stream_frame.embedding is not None
-        print(f"[Server] Received #{frame_count} from {src} "
-              f"(frame={has_frame}, embedding={has_emb}, "
-              f"ts={stream_frame.timestamp:.3f})")
-        frame_id = f"{DEVICE_ID}_{uuid.uuid4().hex[:12]}"
-        ttl = ttl_mgr.compute_ttl()
-        if stream_frame.frame is not None:
-            result = model.process_frame(stream_frame.frame)
-            store.store(
-                frame_id, stream_frame.timestamp, stream_frame.frame,
-                result.embedding, model.get_model_version(), ttl,
-            )
-            print(f"[Server] Stored {frame_id} | label={result.label} "
-                  f"conf={result.confidence:.3f} | "
-                  f"stored_total={store.count()}")
-        elif stream_frame.embedding is not None:
-            store.store(
-                frame_id, stream_frame.timestamp, None,
-                stream_frame.embedding, stream_frame.model_version, ttl,
-            )
+        print(
+            f"[Server] Received #{frame_count} from {src} "
+            f"(frame={has_frame}, embedding={has_emb}, "
+            f"ts={stream_frame.timestamp:.3f})"
+        )
+        store_from_stream_frame(store, stream_frame, ttl_mgr.compute_ttl())
 
 
 async def ttl_cleanup_loop():
@@ -79,7 +90,9 @@ async def ttl_cleanup_loop():
 
 
 async def heartbeat_loop():
-    """Send status heartbeats to the controller."""
+    """Send status heartbeats to the controller. No model runs here, so
+    `current_model_version` is the passthrough sentinel; the actual edge
+    model_version is stored per-row instead."""
     while True:
         if CONTROLLER_URL and CONTROLLER_URL.strip():
             try:
@@ -89,7 +102,7 @@ async def heartbeat_loop():
                         json={
                             "device_cluster": DEVICE_CLUSTER,
                             "device_id": DEVICE_ID,
-                            "current_model_version": model.get_model_version(),
+                            "current_model_version": PASSTHROUGH_MODEL_VERSION,
                             "status": "Active",
                         },
                     )
@@ -102,30 +115,28 @@ async def stream_target_poll_loop():
     """Poll the stream target config file from the daemon for informational purposes."""
     stream_target_path = Path("/config/stream-target.json")
     last_target = None
-    
+
     while True:
         try:
             if stream_target_path.exists():
                 data = json.loads(stream_target_path.read_text())
                 target_ip = data.get("target_ip")
                 target_port = data.get("target_port")
-                
+
                 current_target = (target_ip, target_port) if target_ip and target_port else None
-                
+
                 if current_target and current_target != last_target:
                     print(f"[Server] Stream target config changed to {target_ip}:{target_port}")
                     last_target = current_target
         except Exception as e:
             print(f"[Server] stream_target_poll_loop error: {e}")
-        
+
         await asyncio.sleep(30)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("[Server] Loading model...")
-    model.load()
-    print("[Server] Model loaded.")
+    print("[Server] Starting in passthrough mode (no inference).")
 
     receive_task = asyncio.create_task(stream_receive_loop())
     cleanup_task = asyncio.create_task(ttl_cleanup_loop())

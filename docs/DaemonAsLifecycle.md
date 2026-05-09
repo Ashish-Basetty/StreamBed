@@ -56,7 +56,13 @@ Tests cover all of the above (`go test ./...` and the Python unit suite).
 This is the actual delta to ship next. Don't bundle with anything else; it's a
 topology change with non-trivial blast radius.
 
-### Step 1 — move chunking off the daemon
+### Step 1 — chunking moves to the sidecar (not to the inference container)
+
+Earlier drafts of this doc had chunking moving "into the inference
+container's sender." That's wrong. It just relocates a concern that
+shouldn't live in the inference container in the first place. The
+inference container's responsibility is `frame in → embedding out`,
+nothing else.
 
 Current path:
 ```
@@ -65,20 +71,109 @@ edge inference container  ──TCP──▶  daemon  ──chunks→UDP──�
 
 Target path:
 ```
-edge inference container  ──chunks→UDP──▶  sidecar
+edge inference container
+  ├─ ──UDP──▶  sidecar :video_port   (raw frame bytes, pipe-through)
+  └─ ──UDP──▶  sidecar :embed_port   (embedding bytes from local model)
+                              │
+                              ▼
+                  sidecar chunks + tags + ships
+                  (CHNK on video_port, EMBD on embed_port)
 ```
 
-Changes:
+The **port is the type tag**. Sidecar binds two local UDP listeners:
 
-- `edge/app.py` switches the sender from `StreamBedTCPSender` to
-  `StreamBedUDPSender`, pointed at `127.0.0.1:SIDECAR_LOCAL_UDP_PORT`.
-- Delete `control-plane/DeploymentDaemon/stream_proxy_manager.py` (or strip
-  it down to a stub that just owns nothing).
-- Delete `_run_stream_tcp_server`, `_UDPSendOnlyProtocol`, the bandwidth-
-  poll loop, `should_drop_video_frame`. ~200 lines of daemon code go away.
-- The `frame_len`/`embedding_len`-based tag selection that lives in
-  `forward_frame` today moves into the inference container's sender — the
-  split logic in `_split_for_wire` already does this.
+- `LOCAL_VIDEO_BIND` (e.g. `127.0.0.1:9050`) — incoming bytes get the
+  CHNK tag, are eligible for drop under bandwidth pressure.
+- `LOCAL_EMBED_BIND` (e.g. `127.0.0.1:9051`) — incoming bytes get the
+  EMBD tag, never dropped.
+
+The inference container does not import `make_chunks`, does not know
+about magic bytes, does not implement framing. It only knows two
+`socket.sendto` destinations.
+
+#### Local wire shape between container and sidecar
+
+Each UDP datagram from the container is a serialized **half-populated
+`StreamFrame`** — same `serialize_stream_frame` we use today, but with
+exactly one of `frame` or `embedding` populated:
+
+- `LOCAL_VIDEO_BIND` receives `StreamFrame(frame=raw, embedding=None, …)`.
+- `LOCAL_EMBED_BIND` receives `StreamFrame(frame=None, embedding=emb, …)`.
+
+The sidecar treats each datagram as opaque bytes and chunks it. The
+**server-side receiver** still parses `StreamFrame` to pull out
+timestamp / source_device_id / payload — that hasn't changed and stays
+the right correlation key for matching the two halves on the receiving
+end.
+
+Why keep `StreamFrame` for the local hop instead of inventing a new
+slim header: zero new code on the deserialize side, and the metadata
+fields (timestamp, source_device_id, model_version) are exactly what
+the server needs to correlate. The local-hop overhead of a few bytes
+of header per datagram doesn't matter at this rate.
+
+#### Inference container loop (target shape)
+
+```python
+for frame, ts in video_source:
+    emb = model(frame)                                # only "real work"
+    video_sock.sendto(serialize_video_half(frame, ts))
+    embed_sock.sendto(serialize_embed_half(emb, ts))
+```
+
+`serialize_video_half` / `serialize_embed_half` are one-line wrappers
+around `serialize_stream_frame` with the appropriate field None'd out.
+~10 lines of shipper code total in the container.
+
+#### Changes in detail
+
+- **Inference container** (`edge/app.py`):
+  - Drop `StreamBedTCPSender` import.
+  - Add a tiny shipper module (`edge/shipper.py`?) that owns two UDP
+    sockets and exposes `ship_video(frame_bytes, ts)` and
+    `ship_embedding(emb_bytes, ts)`.
+  - Container's main loop becomes the snippet above.
+- **Sidecar (Go)**:
+  - Add a second UDP listener. `edge.Config` gets `LocalVideoBind` and
+    `LocalEmbedBind` instead of one `LocalUDPBind`.
+  - Two `pumpUDPToQUIC` goroutines, one per listener, each parameterized
+    with the tag it should apply (`TagCHNK` or `TagEMBD`).
+  - **Chunking moves into the sidecar.** Today the sidecar receives
+    pre-chunked datagrams from the daemon and just forwards them. After
+    this change, it receives full payloads from the container and does
+    the chunking itself before `conn.SendDatagram`. Use the existing
+    chunk format (`tag + stream_id + i/n/data_len + data`) — same wire,
+    just produced one side closer to the egress.
+  - Drop the `_split_for_wire` indirection on the Python side (no longer
+    needed; container produces already-half-shaped messages).
+- **Daemon** (`control-plane/DeploymentDaemon/`):
+  - Delete `stream_proxy_manager.py` entirely.
+  - Delete `_run_stream_tcp_server`, `_UDPSendOnlyProtocol`,
+    `_bandwidth_poll_loop`, `should_drop_video_frame`. Roughly 200 lines.
+  - `daemon_config.py` gets the new `LOCAL_VIDEO_BIND` / `LOCAL_EMBED_BIND`
+    pair (passed through to the sidecar at spawn).
+  - `tcp_utils.py` goes away.
+- **Shared (Python)**:
+  - `shared/stream_chunks.py` (`make_chunks`, `CHUNK_MAGIC`, `EMBED_MAGIC`,
+    `CHUNK_SIZE`) becomes Go-only. The Python file can stay for the server
+    side's reassembly logic, but the *outbound* chunker has no callers in
+    Python anymore.
+  - `_split_for_wire` and the senders' two-message logic in
+    `shared/interfaces/stream_interface.py` become unnecessary on the
+    egress side. The code can stay until the inference container is
+    fully cut over; then drop it.
+
+#### What this buys
+
+- Inference container stays minimal: it doesn't know what QUIC is, what
+  CHNK is, what bandwidth means.
+- The sidecar is the single owner of "how data goes on the wire." Adding
+  a third payload kind later (e.g. heartbeats, telemetry) is a port +
+  tag pair, not three separate refactors.
+- The "video pipe through" property is preserved by construction: the
+  inference container forwards raw bytes on the video port without
+  transformation — same bytes that came out of the camera, plus a
+  metadata header.
 
 ### Step 2 — stream-target via file (single ingress, file-as-API)
 
@@ -285,14 +380,25 @@ sidecar/internal/
 ├── streamtarget/            # NEW: file polling
 │   ├── streamtarget.go      # type-safe load, atomic-read
 │   └── watcher.go           # poll loop -> emits new (ip,port) on change
+├── chunker/                 # NEW: move chunk format from Python to Go
+│   └── chunker.go           # tag + stream_id + i/n/data_len + data
 ├── edge/
-│   └── edge.go              # uses peerSwitcher; spawns watcher goroutine
+│   └── edge.go              # two UDP listeners (video / embed),
+│                            # uses peerSwitcher, spawns watcher goroutine,
+│                            # calls chunker on each ingress datagram before
+│                            # SendDatagram
 └── (no quic-side wire format changes — already done)
 ```
 
 The watcher goroutine emits onto a channel; `edge.Run` consumes from it
 and calls `connect_new_peer` per event. Single owner of the connection
 lifecycle.
+
+The two UDP listeners each run their own `pumpUDPToQUIC` parameterized
+with the tag (`TagCHNK` for the video listener, `TagEMBD` for the embed
+listener). Both share a single `quictransport.Conn`. The policy applies
+to both — but only the video listener's traffic is droppable
+(`KindLossyData`), so embeddings always pass.
 
 ## Failure modes after the refactor
 
@@ -320,9 +426,13 @@ If shipping incrementally:
 3. **Switch sidecar bootstrap to file-only.** Remove env-var fallback.
    Daemon's spawn function writes the file synchronously before docker run.
 4. **Drop non-QUIC.** Collapse all `STREAM_TRANSPORT` branches.
-5. **Move chunking off the daemon.** Edge inference container now sends
-   chunked UDP directly to the sidecar's localhost. Delete daemon
-   `stream_proxy_manager` etc.
+5. **Move chunking into the sidecar; container becomes a simple
+   shipper.** Sidecar gains a second UDP listener so port = type tag.
+   Inference container writes raw frame bytes to the video port and
+   embedding bytes to the embed port via two `socket.sendto` calls —
+   no chunking, no magic-byte awareness. Sidecar absorbs the chunk
+   format. Delete `stream_proxy_manager`, the daemon's TCP server, and
+   the Python-side `_split_for_wire` helpers.
 
 Each step is independently shippable. The blast radius widens as you go;
 4 and 5 are the ones that actually take traffic out of the daemon's path.

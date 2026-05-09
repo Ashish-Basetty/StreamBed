@@ -1,0 +1,27 @@
+
+=== cadence=1 ===
+  score=7.14 unlocks=6.64 advice_pct=100.0% advice_age_s=0.008 rt_ms=1.50
+
+=== cadence=5 ===
+  score=5.61 unlocks=5.19 advice_pct=100.0% advice_age_s=0.022 rt_ms=1.44
+
+=== cadence=10 ===
+  score=3.75 unlocks=4.33 advice_pct=99.9% advice_age_s=0.035 rt_ms=1.37
+
+=== cadence=20 ===
+  score=3.82 unlocks=4.16 advice_pct=99.9% advice_age_s=0.064 rt_ms=1.39
+
+=== cadence=inf ===
+  score=2.67 unlocks=4.39 advice_pct=0.0% advice_age_s=-1.000 rt_ms=1.39
+
+== cadence sweep summary ==
+  total wallclock: 9.8 min
+
+   cadence   score  unlocks/ep   advice%    age_s
+         1    7.14        6.64    100.0%    0.008
+         5    5.61        5.19    100.0%    0.022
+        10    3.75        4.33     99.9%    0.035
+        20    3.82        4.16     99.9%    0.064
+       inf    2.67        4.39      0.0%   -1.000
+
+saved -> checkpoints/eval/cadence_sweep_decaying_100ep.json

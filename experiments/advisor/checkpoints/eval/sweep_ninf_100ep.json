@@ -1,0 +1,12 @@
+{
+  "episodes": 100,
+  "crafter_score": 2.665327177006232,
+  "avg_unlocks_per_ep": 4.39,
+  "avg_return": 3.49,
+  "avg_rt_ms": 1.3874095429727697,
+  "avg_advice_pct": 0.0,
+  "avg_advice_age_s": -1.0,
+  "wallclock_s": 111.59691429138184,
+  "edge_host": "127.0.0.1",
+  "edge_port": 9100
+}

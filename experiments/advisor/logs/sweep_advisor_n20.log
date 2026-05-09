@@ -1,0 +1,29 @@
+2026-05-09 15:40:56,685 advisor_server INFO loading teacher=teacher.zip
+2026-05-09 15:40:57,610 advisor_server INFO advisor ready
+[UDPReceiver] listening on 0.0.0.0:9101
+2026-05-09 15:40:57,610 advisor_server INFO listening for features on 0.0.0.0:9101
+[UDPSender] handshake sent to ('127.0.0.1', 9102)
+2026-05-09 15:40:57,610 advisor_server INFO advice will go to 127.0.0.1:9102 (reply_every_n=20)
+[StreamBedUDPProtocol] error: [Errno 61] Connection refused
+[UDPReceiver] handshake from ('127.0.0.1', 63232)
+2026-05-09 15:41:02,612 advisor_server INFO rolling: embd=144 chnk=145 total_advised=7 (cadence_n=20)
+2026-05-09 15:41:07,701 advisor_server INFO rolling: embd=773 chnk=773 total_advised=45 (cadence_n=20)
+2026-05-09 15:41:13,103 advisor_server INFO rolling: embd=921 chnk=921 total_advised=91 (cadence_n=20)
+2026-05-09 15:41:18,672 advisor_server INFO rolling: embd=1103 chnk=1103 total_advised=147 (cadence_n=20)
+2026-05-09 15:41:23,675 advisor_server INFO rolling: embd=1080 chnk=1080 total_advised=201 (cadence_n=20)
+2026-05-09 15:41:28,676 advisor_server INFO rolling: embd=889 chnk=889 total_advised=245 (cadence_n=20)
+2026-05-09 15:41:33,676 advisor_server INFO rolling: embd=884 chnk=884 total_advised=289 (cadence_n=20)
+2026-05-09 15:41:38,676 advisor_server INFO rolling: embd=885 chnk=884 total_advised=333 (cadence_n=20)
+2026-05-09 15:41:43,677 advisor_server INFO rolling: embd=954 chnk=955 total_advised=381 (cadence_n=20)
+2026-05-09 15:41:48,677 advisor_server INFO rolling: embd=875 chnk=874 total_advised=425 (cadence_n=20)
+2026-05-09 15:41:53,677 advisor_server INFO rolling: embd=846 chnk=847 total_advised=467 (cadence_n=20)
+2026-05-09 15:41:58,738 advisor_server INFO rolling: embd=895 chnk=895 total_advised=512 (cadence_n=20)
+2026-05-09 15:42:04,133 advisor_server INFO rolling: embd=1020 chnk=1020 total_advised=563 (cadence_n=20)
+2026-05-09 15:42:09,134 advisor_server INFO rolling: embd=861 chnk=861 total_advised=606 (cadence_n=20)
+2026-05-09 15:42:14,272 advisor_server INFO rolling: embd=834 chnk=834 total_advised=648 (cadence_n=20)
+2026-05-09 15:42:19,273 advisor_server INFO rolling: embd=990 chnk=990 total_advised=697 (cadence_n=20)
+2026-05-09 15:42:24,311 advisor_server INFO rolling: embd=824 chnk=824 total_advised=738 (cadence_n=20)
+2026-05-09 15:42:29,312 advisor_server INFO rolling: embd=883 chnk=883 total_advised=783 (cadence_n=20)
+2026-05-09 15:42:34,647 advisor_server INFO rolling: embd=1006 chnk=1006 total_advised=833 (cadence_n=20)
+2026-05-09 15:42:39,664 advisor_server INFO rolling: embd=836 chnk=836 total_advised=875 (cadence_n=20)
+2026-05-09 15:42:44,664 advisor_server INFO rolling: embd=898 chnk=898 total_advised=920 (cadence_n=20)

@@ -1,0 +1,14 @@
+2026-05-09 12:03:27,865 advisor_server INFO loading teacher=teacher.zip
+2026-05-09 12:03:28,704 advisor_server INFO advisor ready
+[UDPReceiver] listening on 0.0.0.0:9101
+2026-05-09 12:03:28,705 advisor_server INFO listening for features on 0.0.0.0:9101
+[UDPSender] handshake sent to ('127.0.0.1', 9102)
+2026-05-09 12:03:28,705 advisor_server INFO advice will go to 127.0.0.1:9102
+[StreamBedUDPProtocol] error: [Errno 61] Connection refused
+[UDPReceiver] handshake from ('127.0.0.1', 61601)
+2026-05-09 12:03:36,659 advisor_server INFO rolling: embd=0 chnk=1 total_advised=0
+2026-05-09 12:03:41,660 advisor_server INFO rolling: embd=1146 chnk=1146 total_advised=1146
+2026-05-09 12:03:46,661 advisor_server INFO rolling: embd=1176 chnk=1176 total_advised=2322
+2026-05-09 12:03:51,662 advisor_server INFO rolling: embd=1179 chnk=1179 total_advised=3501
+2026-05-09 12:03:56,687 advisor_server INFO rolling: embd=909 chnk=909 total_advised=4410
+2026-05-09 12:04:01,689 advisor_server INFO rolling: embd=1162 chnk=1162 total_advised=5572

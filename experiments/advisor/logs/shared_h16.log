@@ -7,3 +7,41 @@
   collected 20000/50000 (240/s)
   collected 25000/50000 (246/s)
   collected 30000/50000 (246/s)
+  collected 35000/50000 (250/s)
+  collected 40000/50000 (250/s)
+  collected 45000/50000 (249/s)
+  collected 50000/50000 (249/s)
+[shared] encoding all frames once via teacher.encoder
+[shared] feats=(50000, 512)
+[shared] head params = 8,497
+[shared] training head (8 epochs)
+  epoch 1/8: train_nll=2.3538 train_acc=0.363
+  epoch 2/8: train_nll=1.5684 train_acc=0.504
+  epoch 3/8: train_nll=1.2231 train_acc=0.615
+  epoch 4/8: train_nll=1.0238 train_acc=0.678
+  epoch 5/8: train_nll=0.9139 train_acc=0.709
+  epoch 6/8: train_nll=0.8463 train_acc=0.726
+  epoch 7/8: train_nll=0.7997 train_acc=0.738
+  epoch 8/8: train_nll=0.7652 train_acc=0.747
+
+== held-out offline eval ==
+  n samples:    10000
+  argmax acc:   0.746
+  top-3 acc:    0.943
+
+[shared] rolling shared-encoder student in Crafter (30 episodes)
+  crafter ep 5/30: unlocks=9 return=8.10
+  crafter ep 10/30: unlocks=12 return=11.10
+  crafter ep 15/30: unlocks=9 return=8.10
+  crafter ep 20/30: unlocks=10 return=9.10
+  crafter ep 25/30: unlocks=9 return=8.10
+  crafter ep 30/30: unlocks=8 return=7.10
+
+== Crafter end-to-end ==
+  episodes:        30
+  Crafter score:   10.51
+  avg unlocks/ep:  8.97
+  avg return:      8.03
+
+[shared] head saved -> /Users/ashish/Code/CS214/StreamBed/experiments/advisor/checkpoints/students/shared_h16.pt
+[shared] eval summary -> /Users/ashish/Code/CS214/StreamBed/experiments/advisor/checkpoints/eval/shared_h16_30ep.json

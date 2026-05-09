@@ -1,0 +1,126 @@
+2026-05-09 15:37:09,740 edge_inference INFO loading teacher=teacher.zip
+2026-05-09 15:37:10,404 edge_inference INFO loading student=shared_h4.pt
+2026-05-09 15:37:10,405 edge_inference INFO ready: hidden=4 in_dim=512 blend_mode=decaying
+[UDPSender] handshake sent to ('127.0.0.1', 9101)
+2026-05-09 15:37:10,406 edge_inference INFO StreamBedUDPSender → 127.0.0.1:9101 (CHNK + EMBD)
+[UDPReceiver] listening on 0.0.0.0:9102
+2026-05-09 15:37:10,406 edge_inference INFO StreamBedUDPReceiver listening 0.0.0.0:9102 (CSTR advice)
+2026-05-09 15:37:10,406 edge_inference INFO advice_consumer started
+2026-05-09 15:37:10,407 edge_inference INFO edge_inference TCP listening on ('0.0.0.0', 9100)
+2026-05-09 15:37:11,833 edge_inference INFO connection from ('127.0.0.1', 64338)
+2026-05-09 15:37:12,471 edge_inference INFO advice received: count=1
+2026-05-09 15:37:12,969 edge_inference INFO frames_processed=200 last_inference_ms=0.83 advice_recv=39
+2026-05-09 15:37:14,636 edge_inference INFO frames_processed=400 last_inference_ms=1.00 advice_recv=79
+2026-05-09 15:37:15,160 edge_inference INFO frames_processed=600 last_inference_ms=0.99 advice_recv=119
+2026-05-09 15:37:16,329 edge_inference INFO frames_processed=800 last_inference_ms=0.72 advice_recv=159
+2026-05-09 15:37:18,716 edge_inference INFO frames_processed=1000 last_inference_ms=0.52 advice_recv=199
+2026-05-09 15:37:18,732 edge_inference INFO advice received: count=201
+2026-05-09 15:37:19,856 edge_inference INFO frames_processed=1200 last_inference_ms=0.65 advice_recv=239
+2026-05-09 15:37:20,913 edge_inference INFO frames_processed=1400 last_inference_ms=0.63 advice_recv=279
+2026-05-09 15:37:22,018 edge_inference INFO frames_processed=1600 last_inference_ms=0.75 advice_recv=319
+2026-05-09 15:37:23,339 edge_inference INFO frames_processed=1800 last_inference_ms=0.55 advice_recv=359
+2026-05-09 15:37:24,395 edge_inference INFO frames_processed=2000 last_inference_ms=0.58 advice_recv=399
+2026-05-09 15:37:24,409 edge_inference INFO advice received: count=401
+2026-05-09 15:37:25,472 edge_inference INFO frames_processed=2200 last_inference_ms=0.56 advice_recv=439
+2026-05-09 15:37:26,502 edge_inference INFO frames_processed=2400 last_inference_ms=0.63 advice_recv=479
+2026-05-09 15:37:28,188 edge_inference INFO frames_processed=2600 last_inference_ms=0.63 advice_recv=519
+2026-05-09 15:37:29,256 edge_inference INFO frames_processed=2800 last_inference_ms=0.59 advice_recv=559
+2026-05-09 15:37:30,637 edge_inference INFO frames_processed=3000 last_inference_ms=0.55 advice_recv=599
+2026-05-09 15:37:30,652 edge_inference INFO advice received: count=601
+2026-05-09 15:37:31,995 edge_inference INFO frames_processed=3200 last_inference_ms=0.70 advice_recv=639
+2026-05-09 15:37:33,062 edge_inference INFO frames_processed=3400 last_inference_ms=0.50 advice_recv=679
+2026-05-09 15:37:33,571 edge_inference INFO frames_processed=3600 last_inference_ms=0.67 advice_recv=719
+2026-05-09 15:37:34,648 edge_inference INFO frames_processed=3800 last_inference_ms=0.86 advice_recv=759
+2026-05-09 15:37:36,256 edge_inference INFO frames_processed=4000 last_inference_ms=0.68 advice_recv=799
+2026-05-09 15:37:36,270 edge_inference INFO advice received: count=801
+2026-05-09 15:37:37,319 edge_inference INFO frames_processed=4200 last_inference_ms=0.76 advice_recv=839
+2026-05-09 15:37:37,805 edge_inference INFO frames_processed=4400 last_inference_ms=0.71 advice_recv=879
+2026-05-09 15:37:38,838 edge_inference INFO frames_processed=4600 last_inference_ms=0.44 advice_recv=919
+2026-05-09 15:37:39,901 edge_inference INFO frames_processed=4800 last_inference_ms=1.10 advice_recv=959
+2026-05-09 15:37:40,976 edge_inference INFO frames_processed=5000 last_inference_ms=0.55 advice_recv=999
+2026-05-09 15:37:40,991 edge_inference INFO advice received: count=1001
+2026-05-09 15:37:42,065 edge_inference INFO frames_processed=5200 last_inference_ms=0.54 advice_recv=1039
+2026-05-09 15:37:43,324 edge_inference INFO frames_processed=5400 last_inference_ms=0.72 advice_recv=1079
+2026-05-09 15:37:44,771 edge_inference INFO frames_processed=5600 last_inference_ms=1.13 advice_recv=1119
+2026-05-09 15:37:46,105 edge_inference INFO frames_processed=5800 last_inference_ms=0.74 advice_recv=1159
+2026-05-09 15:37:47,183 edge_inference INFO frames_processed=6000 last_inference_ms=0.65 advice_recv=1199
+2026-05-09 15:37:47,197 edge_inference INFO advice received: count=1201
+2026-05-09 15:37:47,651 edge_inference INFO frames_processed=6200 last_inference_ms=0.60 advice_recv=1239
+2026-05-09 15:37:48,704 edge_inference INFO frames_processed=6400 last_inference_ms=0.60 advice_recv=1279
+2026-05-09 15:37:49,762 edge_inference INFO frames_processed=6600 last_inference_ms=0.83 advice_recv=1319
+2026-05-09 15:37:50,910 edge_inference INFO frames_processed=6800 last_inference_ms=0.60 advice_recv=1359
+2026-05-09 15:37:52,065 edge_inference INFO frames_processed=7000 last_inference_ms=0.51 advice_recv=1399
+2026-05-09 15:37:52,079 edge_inference INFO advice received: count=1401
+2026-05-09 15:37:53,322 edge_inference INFO frames_processed=7200 last_inference_ms=0.60 advice_recv=1439
+2026-05-09 15:37:54,473 edge_inference INFO frames_processed=7400 last_inference_ms=0.62 advice_recv=1479
+2026-05-09 15:37:55,800 edge_inference INFO frames_processed=7600 last_inference_ms=0.63 advice_recv=1519
+2026-05-09 15:37:56,864 edge_inference INFO frames_processed=7800 last_inference_ms=0.67 advice_recv=1559
+2026-05-09 15:37:58,496 edge_inference INFO frames_processed=8000 last_inference_ms=0.56 advice_recv=1599
+2026-05-09 15:37:58,511 edge_inference INFO advice received: count=1601
+2026-05-09 15:37:59,574 edge_inference INFO frames_processed=8200 last_inference_ms=0.46 advice_recv=1639
+2026-05-09 15:38:00,634 edge_inference INFO frames_processed=8400 last_inference_ms=1.06 advice_recv=1679
+2026-05-09 15:38:01,709 edge_inference INFO frames_processed=8600 last_inference_ms=0.83 advice_recv=1719
+2026-05-09 15:38:02,799 edge_inference INFO frames_processed=8800 last_inference_ms=0.55 advice_recv=1759
+2026-05-09 15:38:03,859 edge_inference INFO frames_processed=9000 last_inference_ms=0.75 advice_recv=1799
+2026-05-09 15:38:03,875 edge_inference INFO advice received: count=1801
+2026-05-09 15:38:04,933 edge_inference INFO frames_processed=9200 last_inference_ms=0.81 advice_recv=1839
+2026-05-09 15:38:06,069 edge_inference INFO frames_processed=9400 last_inference_ms=0.52 advice_recv=1879
+2026-05-09 15:38:08,289 edge_inference INFO frames_processed=9600 last_inference_ms=0.62 advice_recv=1919
+2026-05-09 15:38:09,368 edge_inference INFO frames_processed=9800 last_inference_ms=0.61 advice_recv=1959
+2026-05-09 15:38:10,522 edge_inference INFO frames_processed=10000 last_inference_ms=0.58 advice_recv=1999
+2026-05-09 15:38:10,536 edge_inference INFO advice received: count=2001
+2026-05-09 15:38:11,011 edge_inference INFO frames_processed=10200 last_inference_ms=0.62 advice_recv=2039
+2026-05-09 15:38:12,111 edge_inference INFO frames_processed=10400 last_inference_ms=0.67 advice_recv=2079
+2026-05-09 15:38:13,806 edge_inference INFO frames_processed=10600 last_inference_ms=0.55 advice_recv=2119
+2026-05-09 15:38:14,943 edge_inference INFO frames_processed=10800 last_inference_ms=0.38 advice_recv=2159
+2026-05-09 15:38:16,059 edge_inference INFO frames_processed=11000 last_inference_ms=0.72 advice_recv=2199
+2026-05-09 15:38:16,073 edge_inference INFO advice received: count=2201
+2026-05-09 15:38:16,536 edge_inference INFO frames_processed=11200 last_inference_ms=0.51 advice_recv=2239
+2026-05-09 15:38:17,565 edge_inference INFO frames_processed=11400 last_inference_ms=0.64 advice_recv=2279
+2026-05-09 15:38:18,637 edge_inference INFO frames_processed=11600 last_inference_ms=0.50 advice_recv=2319
+2026-05-09 15:38:19,767 edge_inference INFO frames_processed=11800 last_inference_ms=0.75 advice_recv=2359
+2026-05-09 15:38:20,847 edge_inference INFO frames_processed=12000 last_inference_ms=0.48 advice_recv=2399
+2026-05-09 15:38:20,859 edge_inference INFO advice received: count=2401
+2026-05-09 15:38:21,916 edge_inference INFO frames_processed=12200 last_inference_ms=0.74 advice_recv=2439
+2026-05-09 15:38:23,005 edge_inference INFO frames_processed=12400 last_inference_ms=0.69 advice_recv=2479
+2026-05-09 15:38:24,056 edge_inference INFO frames_processed=12600 last_inference_ms=0.66 advice_recv=2519
+2026-05-09 15:38:25,102 edge_inference INFO frames_processed=12800 last_inference_ms=0.76 advice_recv=2559
+2026-05-09 15:38:26,756 edge_inference INFO frames_processed=13000 last_inference_ms=0.65 advice_recv=2599
+2026-05-09 15:38:26,770 edge_inference INFO advice received: count=2601
+2026-05-09 15:38:27,819 edge_inference INFO frames_processed=13200 last_inference_ms=0.52 advice_recv=2639
+2026-05-09 15:38:28,990 edge_inference INFO frames_processed=13400 last_inference_ms=0.53 advice_recv=2679
+2026-05-09 15:38:30,699 edge_inference INFO frames_processed=13600 last_inference_ms=1.12 advice_recv=2719
+2026-05-09 15:38:31,756 edge_inference INFO frames_processed=13800 last_inference_ms=0.69 advice_recv=2759
+2026-05-09 15:38:32,841 edge_inference INFO frames_processed=14000 last_inference_ms=0.56 advice_recv=2799
+2026-05-09 15:38:32,856 edge_inference INFO advice received: count=2801
+2026-05-09 15:38:33,880 edge_inference INFO frames_processed=14200 last_inference_ms=0.64 advice_recv=2839
+2026-05-09 15:38:35,064 edge_inference INFO frames_processed=14400 last_inference_ms=0.53 advice_recv=2879
+2026-05-09 15:38:36,207 edge_inference INFO frames_processed=14600 last_inference_ms=0.54 advice_recv=2919
+2026-05-09 15:38:37,347 edge_inference INFO frames_processed=14800 last_inference_ms=0.72 advice_recv=2959
+2026-05-09 15:38:38,481 edge_inference INFO frames_processed=15000 last_inference_ms=0.64 advice_recv=2999
+2026-05-09 15:38:38,495 edge_inference INFO advice received: count=3001
+2026-05-09 15:38:39,557 edge_inference INFO frames_processed=15200 last_inference_ms=0.63 advice_recv=3039
+2026-05-09 15:38:40,675 edge_inference INFO frames_processed=15400 last_inference_ms=0.64 advice_recv=3079
+2026-05-09 15:38:41,839 edge_inference INFO frames_processed=15600 last_inference_ms=0.63 advice_recv=3119
+2026-05-09 15:38:43,553 edge_inference INFO frames_processed=15800 last_inference_ms=0.54 advice_recv=3159
+2026-05-09 15:38:44,065 edge_inference INFO frames_processed=16000 last_inference_ms=0.66 advice_recv=3199
+2026-05-09 15:38:44,080 edge_inference INFO advice received: count=3201
+2026-05-09 15:38:45,134 edge_inference INFO frames_processed=16200 last_inference_ms=0.59 advice_recv=3239
+2026-05-09 15:38:46,212 edge_inference INFO frames_processed=16400 last_inference_ms=0.58 advice_recv=3279
+2026-05-09 15:38:47,409 edge_inference INFO frames_processed=16600 last_inference_ms=0.83 advice_recv=3319
+2026-05-09 15:38:48,513 edge_inference INFO frames_processed=16800 last_inference_ms=0.59 advice_recv=3359
+2026-05-09 15:38:49,606 edge_inference INFO frames_processed=17000 last_inference_ms=0.71 advice_recv=3399
+2026-05-09 15:38:49,622 edge_inference INFO advice received: count=3401
+2026-05-09 15:38:50,815 edge_inference INFO frames_processed=17200 last_inference_ms=0.70 advice_recv=3439
+2026-05-09 15:38:51,947 edge_inference INFO frames_processed=17400 last_inference_ms=0.36 advice_recv=3479
+2026-05-09 15:38:53,117 edge_inference INFO frames_processed=17600 last_inference_ms=0.63 advice_recv=3519
+2026-05-09 15:38:54,166 edge_inference INFO frames_processed=17800 last_inference_ms=0.58 advice_recv=3559
+2026-05-09 15:38:55,230 edge_inference INFO frames_processed=18000 last_inference_ms=0.47 advice_recv=3599
+2026-05-09 15:38:55,244 edge_inference INFO advice received: count=3601
+2026-05-09 15:38:56,332 edge_inference INFO frames_processed=18200 last_inference_ms=0.68 advice_recv=3639
+2026-05-09 15:38:57,377 edge_inference INFO frames_processed=18400 last_inference_ms=0.76 advice_recv=3679
+2026-05-09 15:38:59,095 edge_inference INFO frames_processed=18600 last_inference_ms=0.69 advice_recv=3719
+2026-05-09 15:39:00,193 edge_inference INFO frames_processed=18800 last_inference_ms=0.67 advice_recv=3759
+2026-05-09 15:39:01,244 edge_inference INFO frames_processed=19000 last_inference_ms=0.43 advice_recv=3799
+2026-05-09 15:39:01,259 edge_inference INFO advice received: count=3801
+2026-05-09 15:39:01,490 edge_inference INFO connection closed by ('127.0.0.1', 64338)

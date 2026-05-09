@@ -1,0 +1,17 @@
+{
+  "hidden": 16,
+  "n_params": 8497,
+  "feat_dim": 512,
+  "eval_episodes": 30,
+  "offline": {
+    "n": 10000,
+    "argmax_acc": 0.7459,
+    "top3_acc": 0.9433
+  },
+  "crafter": {
+    "episodes": 30,
+    "crafter_score": 10.50911444220864,
+    "avg_unlocks_per_ep": 8.966666666666667,
+    "avg_return": 8.033333333333333
+  }
+}

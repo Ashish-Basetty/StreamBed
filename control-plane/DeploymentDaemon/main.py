@@ -276,7 +276,6 @@ async def lifespan(app: FastAPI):
     await _cancel_task(proxy_task)
     if proxy_task:
         stream_proxy_manager.close()
-    kill_sidecar(cluster=DEVICE_CLUSTER, device_id=DEVICE_ID)
     await _deregister_with_retries()
 
 

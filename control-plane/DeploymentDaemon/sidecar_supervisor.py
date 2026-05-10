@@ -28,10 +28,16 @@ def spawn_sidecar(
     local_udp_bind: str,
     quic_bind: str,
     local_server_udp: str,
+    local_recv_udp_target: str = "",
+    server_reverse_udp_bind: str = "",
 ) -> str | None:
     """Launch the sidecar container. Idempotent: removes any existing one first.
 
     Returns the new container name or None on failure.
+
+    `local_recv_udp_target` (edge role) and `server_reverse_udp_bind` (server
+    role) are optional reverse-path wiring; empty disables that half. See
+    sidecar/internal/{edge,server} for the protocol details.
     """
     name = _container_name(cluster, device_id)
     try:
@@ -59,6 +65,10 @@ def spawn_sidecar(
     }
     if peer_address:
         env["PEER_ADDRESS"] = peer_address
+    if local_recv_udp_target:
+        env["LOCAL_RECV_UDP_TARGET"] = local_recv_udp_target
+    if server_reverse_udp_bind:
+        env["SERVER_REVERSE_UDP_BIND"] = server_reverse_udp_bind
 
     run_kwargs: dict = {
         "name": name,

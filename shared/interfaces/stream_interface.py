@@ -1,25 +1,27 @@
-from abc import ABC, abstractmethod
-from collections import deque
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from typing import Callable, Optional
-
 import asyncio
+import io
 import json
+import os
 import struct
 import time
-import io
-import os
+from abc import ABC, abstractmethod
+from collections import deque
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 
-import cv2
 import numpy as np
 
-
+# cv2 is only needed for the optional JPEG codec path (use_jpeg=True). The
+# advisor flow ships raw uint8 frames via np.save and never touches cv2;
+# importing it lazily inside the JPEG branches lets inference containers
+# skip the ~30 MB opencv install when they're not encoding JPEG.
 from shared.stream_chunks import (
     CHUNK_MAGIC,
-    EMBED_MAGIC,
     CSTM_LOSSY_MAGIC,
     CSTM_RELIABLE_MAGIC,
+    EMBED_MAGIC,
+)
+from shared.stream_chunks import (
     make_chunks as _make_chunks_impl,
 )
 
@@ -29,11 +31,11 @@ JPEG_MAGIC = b'JPEG'
 @dataclass
 class StreamFrame:
     timestamp: float
-    frame: Optional[np.ndarray]
-    embedding: Optional[np.ndarray]
+    frame: np.ndarray | None
+    embedding: np.ndarray | None
     model_version: str
     source_device_id: str
-    frame_interleaving_rate: Optional[float] = None
+    frame_interleaving_rate: float | None = None
 
 
 def serialize_stream_frame(frame: StreamFrame, use_jpeg: bool = False) -> bytes:
@@ -43,6 +45,7 @@ def serialize_stream_frame(frame: StreamFrame, use_jpeg: bool = False) -> bytes:
     frame_bytes = b''
     if frame.frame is not None:
         if use_jpeg:
+            import cv2  # noqa: PLC0415 — lazy: only JPEG callers pay for opencv
             ok, buf = cv2.imencode('.jpg', frame.frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             frame_bytes = JPEG_MAGIC + buf.tobytes() if ok else b''
         else:
@@ -91,6 +94,7 @@ def deserialize_stream_frame(data: bytes) -> StreamFrame:
     frame = None
     if frame_bytes:
         if frame_bytes[:4] == JPEG_MAGIC:
+            import cv2  # noqa: PLC0415 — lazy: only JPEG callers pay for opencv
             arr = np.frombuffer(frame_bytes[4:], dtype=np.uint8)
             frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         else:
@@ -318,13 +322,13 @@ class StreamBedUDPSender(StreamSenderInterface):
 class StreamBedUDPReceiver(StreamReceiverInterface):
     def __init__(
         self,
-        on_bytes_received: Optional[Callable[[int], None]] = None,
-        on_datagram_received: Optional[Callable[[bytes, tuple], None]] = None,
+        on_bytes_received: Callable[[int], None] | None = None,
+        on_datagram_received: Callable[[bytes, tuple], None] | None = None,
     ):
         self._transport = None
         self._protocol = None
-        self._queue: Optional[asyncio.Queue] = None
-        self._custom_queue: Optional[asyncio.Queue] = None
+        self._queue: asyncio.Queue | None = None
+        self._custom_queue: asyncio.Queue | None = None
         self._stopped = False
         self._on_bytes_received = on_bytes_received
         self._on_datagram_received = on_datagram_received
@@ -334,8 +338,8 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
             self,
             queue: asyncio.Queue,
             custom_queue: asyncio.Queue,
-            on_bytes_received: Optional[Callable[[int], None]] = None,
-            on_datagram_received: Optional[Callable[[bytes, tuple], None]] = None,
+            on_bytes_received: Callable[[int], None] | None = None,
+            on_datagram_received: Callable[[bytes, tuple], None] | None = None,
         ):
             super().__init__()
             self._queue = queue
@@ -437,7 +441,7 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
             if timeout is None:
                 return await self._queue.get()
             return await asyncio.wait_for(self._queue.get(), timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     async def recv_custom(
@@ -455,7 +459,7 @@ class StreamBedUDPReceiver(StreamReceiverInterface):
             if timeout is None:
                 return await self._custom_queue.get()
             return await asyncio.wait_for(self._custom_queue.get(), timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     def get_local_port(self) -> int | None:

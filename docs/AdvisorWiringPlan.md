@@ -283,9 +283,31 @@ Each phase ends with a runnable artifact.
 
 ### Phase D — full docker-compose with the existing stack
 
-- Write `docker-compose.advisor.yml` referencing existing services.
-- Run `docker compose -f docker-compose.yml -f docker-compose.advisor.yml up`.
-- frame_gen on host points at the published edge port.
+- **Sidecar reverse path.** Add bidirectional support tightly integrated
+  with the existing FBCK feedback channel. Server role: optional
+  `SERVER_REVERSE_UDP_BIND` listener pumps app data onto the QUIC control
+  stream. Edge role: non-FBCK control msgs are forwarded to an optional
+  `LOCAL_RECV_UDP_TARGET` UDP destination. Both halves are opt-in so the
+  forward-only flow stays the default.
+- **Daemon wiring.** New env vars `SIDECAR_RECV_PORT` (edge) and
+  `SIDECAR_SERVER_REVERSE_BIND_PORT` (server) drive sidecar reverse-path
+  config. Inference-container `/deploy` now also gives edge containers a
+  docker network alias = DEVICE_ID (previously server-only) and threads
+  `SIDECAR_HOST` + role-aware ports into the container env.
+- **Compose path fix.** `docker-compose.yml` + the three control-plane
+  Dockerfiles still pointed at the pre-rename `controller/` path; updated.
+- **Build images.** `experiments/advisor/edge/Dockerfile` and
+  `experiments/advisor/server/Dockerfile` ship the inference scripts with
+  checkpoints baked in.
+- **Compose overlay.** `experiments/advisor/docker-compose.advisor.yml`
+  flips daemon-edge1 / daemon-server1 to `STREAM_TRANSPORT=quic` with the
+  new reverse-path ports, exposes the edge inference TCP port on host,
+  and declares both inference images as `manual`-profile build targets.
+- **Deploy helper.** `experiments/advisor/scripts/deploy_advisor.sh` POSTs
+  to controller `/deploy` for both devices.
+- Run `docker compose -f docker-compose.yml -f experiments/advisor/docker-compose.advisor.yml up`,
+  then `bash experiments/advisor/scripts/deploy_advisor.sh`, then frame_gen
+  on host pointing at `127.0.0.1:9100`.
 - **Exit:** Crafter score with advisor live > 8.00. Per-frame log
   shows advice ages bounded.
 

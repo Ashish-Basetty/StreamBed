@@ -2,17 +2,11 @@
 import asyncio
 import json
 import logging
+from contextlib import asynccontextmanager
 
 import docker
 import httpx
 import uvicorn
-from fastapi import FastAPI
-from pydantic import BaseModel
-from contextlib import asynccontextmanager
-
-from shared.bandwidth import SentRateBackend
-from shared.utils import _deployment_hash, _get_docker, _get_network
-
 from daemon_config import (
     BANDWIDTH_POLL_INTERVAL,
     CONTROLLER_URL,
@@ -24,10 +18,14 @@ from daemon_config import (
     DEVICE_ID,
     DEVICE_TYPE,
     MAX_FRAME_PAYLOAD_BYTES,
+    REGISTER_RETRIES,
+    REGISTER_RETRY_DELAY,
     SIDECAR_IMAGE,
     SIDECAR_LOCAL_UDP_PORT,
     SIDECAR_PEER_ADDRESS,
     SIDECAR_QUIC_BIND_PORT,
+    SIDECAR_RECV_PORT,
+    SIDECAR_SERVER_REVERSE_BIND_PORT,
     STATE_PATH,
     STREAM_PROXY_HOST,
     STREAM_PROXY_PORT,
@@ -38,13 +36,15 @@ from daemon_config import (
     STREAMBED_DATA_HOST_PATH,
     STREAMBED_MEMORY_LIMIT,
     VIDEO_SOURCE,
-    REGISTER_RETRIES,
-    REGISTER_RETRY_DELAY,
 )
+from fastapi import FastAPI
+from pydantic import BaseModel
 from sidecar_supervisor import kill_sidecar, spawn_sidecar
 from stream_proxy_manager import StreamProxyManager
 from tcp_utils import _UDPSendOnlyProtocol, handle_tcp_stream
 
+from shared.bandwidth import SentRateBackend
+from shared.utils import _deployment_hash, _get_docker, _get_network
 
 # Configure logging (same format as controller)
 logging.basicConfig(
@@ -197,22 +197,58 @@ async def _cancel_task(task: asyncio.Task | None) -> None:
             pass
 
 
-def _spawn_sidecar_for_role() -> bool:
-    """Spawn the QUIC sidecar matching this daemon's role. No-op unless STREAM_TRANSPORT=quic."""
+def _wait_running(client, name: str, timeout: int = 30) -> None:
+    """Block until the named container status is 'running', or timeout expires."""
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            c = client.containers.get(name)
+            if c.status == "running":
+                return
+        except docker.errors.NotFound:
+            pass
+        time.sleep(0.5)
+    logger.warning(f"[Daemon] container {name} not running after {timeout}s")
+
+
+def _spawn_sidecar_for_role() -> str | None:
+    """Spawn the QUIC sidecar matching this daemon's role. No-op unless STREAM_TRANSPORT=quic.
+
+    Reverse-path wiring is opt-in:
+      - Edge sidecar gets LOCAL_RECV_UDP_TARGET=<DEVICE_ID>:SIDECAR_RECV_PORT
+        when SIDECAR_RECV_PORT > 0. The local inference container must be on
+        the same docker network and have an alias = DEVICE_ID for that name
+        to resolve. /deploy attaches the alias for both server and edge.
+      - Server sidecar gets SERVER_REVERSE_UDP_BIND=0.0.0.0:SIDECAR_SERVER_REVERSE_BIND_PORT
+        when SIDECAR_SERVER_REVERSE_BIND_PORT > 0.
+    """
     if STREAM_TRANSPORT != "quic":
-        return False
+        return None
     role = "edge" if DEVICE_TYPE == "edge" else "server"
-    return bool(
-        spawn_sidecar(
-            cluster=DEVICE_CLUSTER,
-            device_id=DEVICE_ID,
-            role=role,
-            image=SIDECAR_IMAGE,
-            peer_address=SIDECAR_PEER_ADDRESS or None,
-            local_udp_bind=f"0.0.0.0:{SIDECAR_LOCAL_UDP_PORT}",
-            quic_bind=f"0.0.0.0:{SIDECAR_QUIC_BIND_PORT}",
-            local_server_udp=f"127.0.0.1:{STREAM_PROXY_PORT}",
-        )
+    local_recv_udp_target = ""
+    server_reverse_udp_bind = ""
+    if role == "edge" and SIDECAR_RECV_PORT > 0:
+        local_recv_udp_target = f"{DEVICE_ID}:{SIDECAR_RECV_PORT}"
+    if role == "server" and SIDECAR_SERVER_REVERSE_BIND_PORT > 0:
+        server_reverse_udp_bind = f"0.0.0.0:{SIDECAR_SERVER_REVERSE_BIND_PORT}"
+    # The server sidecar must reach its local inference container by network
+    # alias, not 127.0.0.1 (which would loop within the sidecar's namespace).
+    local_server_udp = (
+        f"{DEVICE_ID}:{STREAM_PROXY_PORT}" if role == "server"
+        else f"127.0.0.1:{STREAM_PROXY_PORT}"
+    )
+    return spawn_sidecar(
+        cluster=DEVICE_CLUSTER,
+        device_id=DEVICE_ID,
+        role=role,
+        image=SIDECAR_IMAGE,
+        peer_address=SIDECAR_PEER_ADDRESS or None,
+        local_udp_bind=f"0.0.0.0:{SIDECAR_LOCAL_UDP_PORT}",
+        quic_bind=f"0.0.0.0:{SIDECAR_QUIC_BIND_PORT}",
+        local_server_udp=local_server_udp,
+        local_recv_udp_target=local_recv_udp_target,
+        server_reverse_udp_bind=server_reverse_udp_bind,
     )
 
 
@@ -240,6 +276,7 @@ async def lifespan(app: FastAPI):
     await _cancel_task(proxy_task)
     if proxy_task:
         stream_proxy_manager.close()
+    kill_sidecar(cluster=DEVICE_CLUSTER, device_id=DEVICE_ID)
     await _deregister_with_retries()
 
 
@@ -295,14 +332,6 @@ def deploy(body: DeployRequest) -> dict:
         if volumes:
             run_kwargs["volumes"] = volumes
 
-        if network:
-            run_kwargs["network"] = network
-            # Server containers get network alias = device_id so proxy can reach them at server-001:9000
-            if DEVICE_TYPE == "server":
-                run_kwargs["networking_config"] = client.api.create_networking_config({
-                    network: client.api.create_endpoint_config(aliases=[DEVICE_ID])
-                })
-
         container_env = {
             "DEVICE_ID": DEVICE_ID,
             "DEVICE_CLUSTER": DEVICE_CLUSTER,
@@ -313,21 +342,54 @@ def deploy(body: DeployRequest) -> dict:
         if DEVICE_TYPE == "edge":
             container_env["STREAM_PROXY_HOST"] = STREAM_PROXY_HOST
             container_env["STREAM_PROXY_PORT"] = str(STREAM_PROXY_PORT)
+        # QUIC sidecar coordinates for inference containers that talk UDP-direct
+        # to the sidecar (advisor flow). Backward-compatible: the existing
+        # edge/server containers ignore these. Edge gets SIDECAR_FEED_PORT
+        # (where to send features) + ADVICE_LISTEN_PORT (where the sidecar
+        # forwards advice in). Server gets SIDECAR_REVERSE_PORT (where to send
+        # advice) + FEED_LISTEN_PORT (where the sidecar forwards features in).
+        if STREAM_TRANSPORT == "quic":
+            sidecar_name = f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-sidecar"
+            container_env["SIDECAR_HOST"] = sidecar_name
+            if DEVICE_TYPE == "edge":
+                container_env["SIDECAR_FEED_PORT"] = str(SIDECAR_LOCAL_UDP_PORT)
+                if SIDECAR_RECV_PORT > 0:
+                    container_env["ADVICE_LISTEN_PORT"] = str(SIDECAR_RECV_PORT)
+            else:
+                container_env["FEED_LISTEN_PORT"] = str(STREAM_PROXY_PORT)
+                if SIDECAR_SERVER_REVERSE_BIND_PORT > 0:
+                    container_env["SIDECAR_REVERSE_PORT"] = str(SIDECAR_SERVER_REVERSE_BIND_PORT)
         run_kwargs["environment"] = container_env
 
-        client.containers.run(body.image, **run_kwargs)
-
+        container = client.containers.create(body.image, **run_kwargs)
+        if network:
+            client.networks.get(network).connect(container, aliases=[DEVICE_ID])
+        container.start()
         _save_state(deploy_hash, body.image)
-        _spawn_sidecar_for_role()
+
+        sidecar_name = _spawn_sidecar_for_role()
+
+        # Wait for both containers to reach "running" before returning so that
+        # callers (e.g. deploy scripts) can safely proceed.  The inference
+        # container is registered in Docker DNS as soon as containers.run()
+        # returns, so the sidecar's lazy DNS resolution (per-peer, not at
+        # startup) will succeed whenever the first QUIC peer connects.
+        _wait_running(client, new_container, timeout=60)
+        if sidecar_name:
+            _wait_running(client, sidecar_name, timeout=30)
+
         return {"ok": True, "container_hash": deploy_hash}
     except docker.errors.ImageNotFound:
         _stop_and_remove(new_container)
-        return {"ok": False, "error": "Image not found"}
+        logger.error("[Daemon] /deploy failed: image not found: %s", body.image)
+        return {"ok": False, "error": f"Image not found: {body.image}"}
     except docker.errors.APIError as e:
         _stop_and_remove(new_container)
+        logger.error("[Daemon] /deploy Docker API error: %s", e)
         return {"ok": False, "error": str(e)}
     except Exception as e:
         _stop_and_remove(new_container)
+        logger.exception("[Daemon] /deploy unexpected error")
         return {"ok": False, "error": str(e)}
 
 @app.delete("/delete")

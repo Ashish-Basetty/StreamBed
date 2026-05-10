@@ -1,0 +1,10 @@
+# Runtime deps for advisor server inference container.
+# Same baseline as the edge image — sb3 to load the teacher, crafter
+# pulled in transitively by the shared advisorlib import chain.
+# Pin to versions matching the local conda env that produced the teacher
+# checkpoint. SB3 < 2.4 can't deserialize FloatSchedule; gymnasium 1.x is
+# what crafter ships with in this env.
+numpy>=1.26,<3
+stable-baselines3>=2.8.0,<3
+gymnasium>=1.0,<2
+crafter==1.8.3

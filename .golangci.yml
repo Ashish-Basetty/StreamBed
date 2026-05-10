@@ -1,0 +1,41 @@
+# golangci-lint config for the QUIC sidecar. Runs via pre-commit hook
+# (.pre-commit-config.yaml). Manual: `cd sidecar && golangci-lint run ./...`.
+#
+# Default linter set is intentionally close to the tool's own defaults —
+# errcheck/govet/staticcheck/ineffassign/unused — which catch real bugs
+# without nitpicking style. Style is best handled by `gofmt` (already a
+# pre-commit hook).
+version: "2"
+run:
+  timeout: 2m
+  go: "1.22"
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck      # unchecked returned errors
+    - govet         # `go vet` checks
+    - staticcheck   # the strict-bug linter
+    - ineffassign   # assignments that go nowhere
+    - unused        # unused vars / consts / fields
+    - misspell      # typos in comments / strings
+  settings:
+    errcheck:
+      # Close() errors in defer are universally ignored in Go — you can't act on
+      # them after the fact. fmt.Fprintf to an http.ResponseWriter also never
+      # warrants a fatal.
+      exclude-functions:
+        - (net.Conn).Close
+        - (*net.UDPConn).Close
+        - (*net.TCPConn).Close
+        - (net.Listener).Close
+        - fmt.Fprintf
+
+issues:
+  exclude-rules:
+    # Test files often shadow names and use t.Errorf in ways that errcheck
+    # complains about; relax there.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - unused

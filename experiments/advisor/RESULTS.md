@@ -65,8 +65,78 @@ fire-and-forget and would block under any RTT spike.
 
 ### Phase D — docker-compose with real sidecars
 
-Pending. Wiring is identical (CHNK + EMBD + CSTR), the QUIC sidecars just
-sit between the edge inference and advisor processes.
+**Wiring built. End-to-end run pending image push.**
+
+The sidecar didn't have a server→edge application data path (only FBCK
+flowed back over the control stream). Phase D now ships:
+
+1. **Bidirectional QUIC sidecar.** Server role gains an optional
+   `SERVER_REVERSE_UDP_BIND` listener; received packets are pumped onto the
+   QUIC control stream (same channel pumpFeedback uses). Edge role gains an
+   optional `LOCAL_RECV_UDP_TARGET`; non-FBCK control msgs are forwarded out
+   to that UDP destination. CSTR advice rides this path; FBCK keeps its
+   existing dispatch in `pumpControlIntoBandwidth`. Verified by
+   [tests/quic/test_reverse_path.py](../../tests/quic/test_reverse_path.py).
+2. **Daemon updates.**
+   - `_spawn_sidecar_for_role` reads `SIDECAR_RECV_PORT` (edge) and
+     `SIDECAR_SERVER_REVERSE_BIND_PORT` (server) and threads them through to
+     `spawn_sidecar`.
+   - Server's `LOCAL_SERVER_UDP` target switched from `127.0.0.1:<port>`
+     (looped back to the sidecar itself) to `<DEVICE_ID>:<port>` (resolves
+     to the inference container by docker network alias). This was a latent
+     bug in the forward path too.
+   - Edge inference containers now also get a network alias = DEVICE_ID
+     (previously only server containers did).
+   - `/deploy` now passes role-aware sidecar coords to inference containers:
+     edge gets `SIDECAR_HOST`/`SIDECAR_FEED_PORT`/`ADVICE_LISTEN_PORT`,
+     server gets `SIDECAR_HOST`/`FEED_LISTEN_PORT`/`SIDECAR_REVERSE_PORT`.
+3. **Compose path fix.** docker-compose.yml + the three control-plane
+   Dockerfiles all referenced the old `controller/` path; renamed to
+   `control-plane/` to match the post-rename layout.
+4. **Advisor inference Dockerfiles.** `experiments/advisor/edge/Dockerfile`
+   and `experiments/advisor/server/Dockerfile` build CPU-only Python images
+   with teacher.zip + shared_h4.pt baked in. Container layout mirrors the
+   repo so the scripts' `parents[3]` / `parents[1]` sys.path inserts work.
+5. **`docker-compose.advisor.yml`** overlay flips daemon-edge1 and
+   daemon-server1 to `STREAM_TRANSPORT=quic` with reverse-path ports set,
+   declares both inference images as `manual`-profile build targets, and
+   exposes the edge inference TCP port 9100 on the host for frame_gen.
+
+#### Workflow
+
+```bash
+# 1. Build images (locally) and push to your registry of choice.
+docker compose -f docker-compose.yml \
+               -f experiments/advisor/docker-compose.advisor.yml \
+               build advisor-edge advisor-server
+docker push ashishbasetty/streambed-advisor-edge:latest
+docker push ashishbasetty/streambed-advisor-server:latest
+
+# 2. Bring up controller + router + the two daemons (their sidecars are
+#    spawned at /deploy time, so don't worry about them here).
+docker compose -f docker-compose.yml \
+               -f experiments/advisor/docker-compose.advisor.yml up -d \
+               controller router daemon-edge1 daemon-server1
+
+# 3. Deploy the inference containers via the controller. This launches the
+#    inference container, which triggers the daemon to also spawn the QUIC
+#    sidecar with the right reverse-path wiring.
+bash experiments/advisor/scripts/deploy_advisor.sh
+
+# 4. Drive Crafter from the host.
+conda activate streambed
+python experiments/advisor/host/frame_gen.py \
+       --episodes 30 --edge-host 127.0.0.1 --edge-port 9100
+```
+
+#### Open items before declaring Phase D done
+
+- Build the two advisor images locally and push.
+- Run the workflow above end-to-end. Exit criterion is **score > 8.00**
+  (Phase B's 2.43 baseline plus advisor lift) with `advice_age_s` bounded
+  on the per-frame log.
+- If the advisor lift is < the Phase C result (8.35), suspect QUIC RTT,
+  not protocol breakage — same code paths, just more hops.
 
 ### Phase E — cadence sweep (real wire, replacement mode)
 

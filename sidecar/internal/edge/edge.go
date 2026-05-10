@@ -1,11 +1,13 @@
 // Package edge implements the edge-side sidecar role:
 //
-//   daemon -> UDP localhost -> [edge sidecar] -> QUIC -> peer sidecar
+//	daemon -> UDP localhost -> [edge sidecar] -> QUIC -> peer sidecar
 //
 // Read local UDP, classify by 4-byte magic, push CHNK as datagrams and
 // RATE/ACTN over the control stream. The reverse direction carries server
-// FBCK observations into the bandwidth.RemoteBackend; nothing is forwarded
-// out to the daemon — rate enforcement is fully sidecar-internal.
+// FBCK observations into the bandwidth.RemoteBackend, plus (when
+// LocalRecvUDPTarget is set) any non-FBCK control payloads — e.g. CSTR
+// advice from a server-side advisor — forwarded back out to a local UDP
+// destination. Rate enforcement is fully sidecar-internal.
 package edge
 
 import (
@@ -24,8 +26,13 @@ import (
 type Config struct {
 	LocalUDPBind string // "0.0.0.0:9050"
 	PeerAddr     string // "server-sidecar:4433"
-	TLS          any    // *tls.Config kept generic to avoid stdlib import here
-	Metrics      *metrics.Registry
+	// LocalRecvUDPTarget is an optional "host:port" the edge sidecar will
+	// forward non-FBCK control messages to (e.g. CSTR advice originating from
+	// a server-side advisor). Empty disables the reverse-data path; FBCK keeps
+	// flowing into the bandwidth estimator either way.
+	LocalRecvUDPTarget string
+	TLS                any // *tls.Config kept generic to avoid stdlib import here
+	Metrics            *metrics.Registry
 	// Policy gates outbound payloads. If nil, Run constructs a
 	// RateLimit policy backed by a Composite(SentRate, RemoteRate) estimator.
 	Policy policy.Policy
@@ -74,7 +81,7 @@ func Run(ctx context.Context, cfg Config) error {
 	errc := make(chan error, 3)
 	go func() { errc <- pumpUDPToQUIC(ctx, udp, conn, cfg) }()
 	go func() { errc <- sentRate.Run(ctx) }()
-	go func() { errc <- pumpControlIntoBandwidth(ctx, conn, remoteRate) }()
+	go func() { errc <- pumpControlIntoBandwidth(ctx, conn, remoteRate, cfg.LocalRecvUDPTarget) }()
 
 	select {
 	case <-ctx.Done():
@@ -121,10 +128,18 @@ func pumpUDPToQUIC(ctx context.Context, udp *net.UDPConn, conn *quictransport.Co
 }
 
 // pumpControlIntoBandwidth reads control frames from the peer and dispatches
-// by magic. FBCK frames update the RemoteBackend; everything else is logged
-// and dropped — RATE/ACTN dispatch is future work, but landing them here keeps
-// the receive loop in one place.
-func pumpControlIntoBandwidth(ctx context.Context, conn *quictransport.Conn, remote *bandwidth.RemoteBackend) error {
+// by magic. FBCK frames update the RemoteBackend. Non-FBCK frames are
+// forwarded to recvTarget (resolved lazily on first use) as raw UDP — this is
+// how server-side CSTR (e.g. advisor advice) reaches the local app. Lazy
+// resolution avoids startup failures when the inference container's DNS alias
+// isn't registered yet.
+func pumpControlIntoBandwidth(
+	ctx context.Context,
+	conn *quictransport.Conn,
+	remote *bandwidth.RemoteBackend,
+	recvTarget string,
+) error {
+	var recvOut *net.UDPConn
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -147,7 +162,28 @@ func pumpControlIntoBandwidth(ctx context.Context, conn *quictransport.Conn, rem
 			bps := binary.BigEndian.Uint64(msg[4:12])
 			remote.Update(bps)
 		default:
-			// RATE / ACTN producers can land here later.
+			// CSTR / RATE / ACTN bound for the local app. Resolve and dial on
+			// first use so the sidecar can start before the inference container
+			// is registered in Docker DNS.
+			if recvTarget == "" {
+				continue
+			}
+			if recvOut == nil {
+				raddr, rerr := net.ResolveUDPAddr("udp", recvTarget)
+				if rerr != nil {
+					log.Printf("edge: reverse-path resolve %s: %v (dropping)", recvTarget, rerr)
+					continue
+				}
+				recvOut, rerr = net.DialUDP("udp", nil, raddr)
+				if rerr != nil {
+					log.Printf("edge: reverse-path dial %s: %v (dropping)", recvTarget, rerr)
+					continue
+				}
+				log.Printf("edge: reverse-path UDP -> %s", raddr)
+			}
+			if _, werr := recvOut.Write(msg); werr != nil {
+				log.Printf("edge: reverse-path UDP write: %v", werr)
+			}
 		}
 	}
 }

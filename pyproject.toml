@@ -1,0 +1,75 @@
+# Ruff is the project's Python linter / import-orderer / syntax-modernizer.
+# Run via the pre-commit hook (`.pre-commit-config.yaml`); install once with
+# `pre-commit install`. Manual runs:
+#   ruff check .             # lint everything
+#   ruff check --fix .       # lint + auto-fix what's safe
+#   ruff check path/to/file  # one file
+#
+# Why no `ruff format` in pre-commit yet: turning it on would reformat the
+# entire codebase on the next commit. Adopt it later with a single bulk-format
+# commit if/when the team wants it.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = [
+    "control-plane",
+    "shared",
+    "server",
+    "edge",
+    "experiments",
+    "tests",
+    "scripting",
+]
+extend-exclude = [
+    "frontend",
+    "daemon-data",
+    "controller/router-data",
+    "control-plane/router-data",
+    "control-plane/data",
+    "experiments/advisor/checkpoints",
+    "experiments/advisor/logs",
+    "experiments/advisor/videos",
+    "**/__pycache__",
+]
+
+[tool.ruff.lint]
+# Pragmatic default: catch real bugs (F, B, E9), enforce consistent imports
+# (I), modernize syntax safely (UP), keep stylistic complaints minimal.
+# https://docs.astral.sh/ruff/rules/ for the full code list.
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes (undefined names, unused imports, real bugs)
+    "W",   # pycodestyle warnings
+    "I",   # isort (import order)
+    "B",   # flake8-bugbear (mutable default args, etc.)
+    "UP",  # pyupgrade (modernize syntax)
+]
+ignore = [
+    # Line-too-long: accept up to line-length above; longer lines are usually
+    # in long string literals or test data and not worth the noise.
+    "E501",
+    # Mutable default arg in dataclasses is fine (and common in this repo's
+    # config dataclasses). Re-enable per-file if needed.
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests routinely use `assert` (it's the test framework's API) and may have
+# unused fixtures; relax those there.
+"tests/**/*.py" = ["B011", "F401", "F811", "E402"]
+# `__init__.py` files often re-export; F401 (unused import) is wrong there.
+"**/__init__.py" = ["F401"]
+# Advisor scripts (and similar `experiments/`-tree code) do
+# `sys.path.insert(...)` before importing sibling modules so they can be
+# run as standalone scripts; that's the intent, not an oversight.
+"experiments/**/*.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+# Treat the project's first-party packages as local so imports group cleanly.
+known-first-party = [
+    "shared",
+    "control_plane",
+    "advisorlib",
+    "bench",
+]

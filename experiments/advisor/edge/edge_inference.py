@@ -34,11 +34,11 @@ import base64
 import json
 import logging
 import math
+import os
 import struct
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
@@ -55,7 +55,10 @@ if str(_ADVISOR_ROOT) not in sys.path:
     sys.path.insert(0, str(_ADVISOR_ROOT))
 
 from advisorlib.tcp_framing import (  # noqa: E402
-    ACTN_MAGIC, CHUNK_MAGIC, read_message, write_message,
+    ACTN_MAGIC,
+    CHUNK_MAGIC,
+    read_message,
+    write_message,
 )
 from bench.train_shared_head import SmallHead  # noqa: E402
 
@@ -112,7 +115,7 @@ class EdgeInference:
         # Advice slot — written by advice_consumer, read by predict.
         # No lock needed: assignment of a tuple of immutable refs is
         # atomic in CPython, and "stale by one read" is fine.
-        self._latest_advice: Optional[np.ndarray] = None
+        self._latest_advice: np.ndarray | None = None
         self._latest_advice_local_t: float = 0.0
         self.advice_recv_count = 0
 
@@ -243,7 +246,7 @@ def encode_action_msg(
 
 async def handle_connection(
     inference: EdgeInference,
-    sender: Optional[StreamBedUDPSender],
+    sender: StreamBedUDPSender | None,
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
 ) -> None:
@@ -332,9 +335,9 @@ def load_inference(args: argparse.Namespace) -> EdgeInference:
 
 
 async def serve(args: argparse.Namespace, inference: EdgeInference) -> None:
-    sender: Optional[StreamBedUDPSender] = None
-    receiver: Optional[StreamBedUDPReceiver] = None
-    advice_task: Optional[asyncio.Task] = None
+    sender: StreamBedUDPSender | None = None
+    receiver: StreamBedUDPReceiver | None = None
+    advice_task: asyncio.Task | None = None
 
     advisor_disabled = (args.advisor_host or "").lower() == "none"
     if advisor_disabled:
@@ -374,18 +377,29 @@ async def serve(args: argparse.Namespace, inference: EdgeInference) -> None:
 
 
 def main():
+    # Defaults can come from env vars set by the StreamBed deployment daemon
+    # (see control-plane/DeploymentDaemon/main.py). CLI flags still win when
+    # given — useful for local Phase C runs without the docker stack.
     p = argparse.ArgumentParser()
-    p.add_argument("--teacher", type=Path, required=True)
-    p.add_argument("--student", type=Path, required=True,
+    p.add_argument("--teacher", type=Path,
+                   default=Path(os.environ.get("TEACHER_PATH", "")) or None,
+                   required="TEACHER_PATH" not in os.environ)
+    p.add_argument("--student", type=Path,
+                   default=Path(os.environ.get("STUDENT_PATH", "")) or None,
+                   required="STUDENT_PATH" not in os.environ,
                    help="shared_h{N}.pt checkpoint.")
     # Host ⇄ edge TCP server.
-    p.add_argument("--host", default="0.0.0.0")
-    p.add_argument("--port", type=int, default=9100)
+    p.add_argument("--host", default=os.environ.get("EDGE_TCP_HOST", "0.0.0.0"))
+    p.add_argument("--port", type=int,
+                   default=int(os.environ.get("EDGE_TCP_PORT", "9100")))
     # Edge ⇄ advisor UDP. --advisor-host=none disables.
-    p.add_argument("--advisor-host", default="127.0.0.1")
-    p.add_argument("--advisor-port", type=int, default=9101)
+    p.add_argument("--advisor-host",
+                   default=os.environ.get("SIDECAR_HOST", "127.0.0.1"))
+    p.add_argument("--advisor-port", type=int,
+                   default=int(os.environ.get("SIDECAR_FEED_PORT", "9101")))
     p.add_argument("--advice-listen-host", default="0.0.0.0")
-    p.add_argument("--advice-listen-port", type=int, default=9102)
+    p.add_argument("--advice-listen-port", type=int,
+                   default=int(os.environ.get("ADVICE_LISTEN_PORT", "9102")))
     # Blending policy.
     p.add_argument("--blend-mode",
                    choices=["off", "replacement", "additive", "decaying"],

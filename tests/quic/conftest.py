@@ -11,12 +11,11 @@ import shutil
 import socket
 import subprocess
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import httpx
 import pytest
-
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SIDECAR_DIR = _REPO_ROOT / "sidecar"
@@ -166,22 +165,35 @@ def sidecar_pair_factory(sidecar_binary, tmp_path):
 
     Each call returns a dict with `server`, `edges` (list), and `ports`.
     `ports.edges[i]` is the local UDP port to send into for edge i.
+
+    `enable_reverse=True` opens the optional reverse-path UDP listener on the
+    server (`SERVER_REVERSE_UDP_BIND`) and the optional UDP forward target on
+    each edge (`LOCAL_RECV_UDP_TARGET` -> a freshly-bound socket per edge),
+    so server-originated app data flows back as control frames and lands in
+    a per-edge listener that the test can read.
     """
     spawned: list[SidecarProcess] = []
+    sockets: list[socket.socket] = []
 
-    def _factory(edge_count: int = 1) -> dict:
+    def _factory(edge_count: int = 1, enable_reverse: bool = False) -> dict:
         server_quic = _free_udp_port()
         server_metrics = _free_port()
         server_local_udp = _free_udp_port()
 
+        server_env = {
+            "QUIC_BIND": f"127.0.0.1:{server_quic}",
+            "LOCAL_SERVER_UDP": f"127.0.0.1:{server_local_udp}",
+            "METRICS_ADDR": f"127.0.0.1:{server_metrics}",
+        }
+        server_reverse_port = None
+        if enable_reverse:
+            server_reverse_port = _free_udp_port()
+            server_env["SERVER_REVERSE_UDP_BIND"] = f"127.0.0.1:{server_reverse_port}"
+
         server = SidecarProcess(
             sidecar_binary,
             role="server",
-            env={
-                "QUIC_BIND": f"127.0.0.1:{server_quic}",
-                "LOCAL_SERVER_UDP": f"127.0.0.1:{server_local_udp}",
-                "METRICS_ADDR": f"127.0.0.1:{server_metrics}",
-            },
+            env=server_env,
             log_path=tmp_path / "server.log",
         )
         server.start()
@@ -191,17 +203,30 @@ def sidecar_pair_factory(sidecar_binary, tmp_path):
         edges = []
         edge_udp_ports = []
         edge_metrics_ports = []
+        edge_recv_socks: list[socket.socket | None] = []
         for i in range(edge_count):
             u_port = _free_udp_port()
             m_port = _free_port()
+            edge_env = {
+                "PEER_ADDRESS": f"127.0.0.1:{server_quic}",
+                "LOCAL_UDP_BIND": f"127.0.0.1:{u_port}",
+                "METRICS_ADDR": f"127.0.0.1:{m_port}",
+            }
+            recv_sock: socket.socket | None = None
+            if enable_reverse:
+                # Bind the listener BEFORE starting the sidecar so the sidecar's
+                # first UDP write doesn't ICMP-bounce.
+                recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                recv_sock.bind(("127.0.0.1", 0))
+                recv_sock.settimeout(2.0)
+                sockets.append(recv_sock)
+                recv_port = recv_sock.getsockname()[1]
+                edge_env["LOCAL_RECV_UDP_TARGET"] = f"127.0.0.1:{recv_port}"
+            edge_recv_socks.append(recv_sock)
             e = SidecarProcess(
                 sidecar_binary,
                 role="edge",
-                env={
-                    "PEER_ADDRESS": f"127.0.0.1:{server_quic}",
-                    "LOCAL_UDP_BIND": f"127.0.0.1:{u_port}",
-                    "METRICS_ADDR": f"127.0.0.1:{m_port}",
-                },
+                env=edge_env,
                 log_path=tmp_path / f"edge-{i}.log",
             )
             e.start()
@@ -218,12 +243,19 @@ def sidecar_pair_factory(sidecar_binary, tmp_path):
                 "server_quic": server_quic,
                 "server_metrics": server_metrics,
                 "server_local_udp": server_local_udp,
+                "server_reverse_udp": server_reverse_port,
                 "edges_udp": edge_udp_ports,
                 "edges_metrics": edge_metrics_ports,
             },
+            "edge_recv_socks": edge_recv_socks,
         }
 
     yield _factory
 
     for p in spawned:
         p.stop()
+    for s in sockets:
+        try:
+            s.close()
+        except Exception:
+            pass

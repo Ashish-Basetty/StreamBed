@@ -20,8 +20,10 @@ func main() {
 	role := flag.String("role", env("SIDECAR_ROLE", "edge"), "edge|server")
 	peer := flag.String("peer", env("PEER_ADDRESS", ""), "peer sidecar address (edge role)")
 	localUDP := flag.String("local-udp", env("LOCAL_UDP_BIND", "0.0.0.0:9050"), "local UDP bind (edge role)")
+	localRecv := flag.String("local-recv", env("LOCAL_RECV_UDP_TARGET", ""), "edge role: optional UDP host:port; non-FBCK control msgs are forwarded here for the local app")
 	bind := flag.String("bind", env("QUIC_BIND", "0.0.0.0:4433"), "QUIC bind (server role)")
 	localServer := flag.String("local-server", env("LOCAL_SERVER_UDP", "127.0.0.1:9000"), "server container UDP target (server role)")
+	serverRecvBind := flag.String("server-recv-bind", env("SERVER_REVERSE_UDP_BIND", ""), "server role: optional UDP listener for reverse-path data (e.g. advisor CSTR); empty disables")
 	metricsAddr := flag.String("metrics", env("METRICS_ADDR", ":9100"), "Prometheus metrics bind")
 	flag.Parse()
 
@@ -46,14 +48,16 @@ func main() {
 			log.Fatal("edge role requires PEER_ADDRESS / -peer")
 		}
 		err = edge.Run(ctx, edge.Config{
-			LocalUDPBind: *localUDP,
-			PeerAddr:     *peer,
-			Metrics:      reg,
+			LocalUDPBind:       *localUDP,
+			LocalRecvUDPTarget: *localRecv,
+			PeerAddr:           *peer,
+			Metrics:            reg,
 		})
 	case "server":
 		err = server.Run(ctx, server.Config{
 			BindAddr:           *bind,
 			LocalServerUDPAddr: *localServer,
+			LocalUDPBindAddr:   *serverRecvBind,
 			Metrics:            reg,
 		})
 	default:

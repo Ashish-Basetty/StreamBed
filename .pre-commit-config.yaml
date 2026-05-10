@@ -1,0 +1,48 @@
+# Pre-commit hooks for StreamBed.
+#
+# One-time setup:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Then every `git commit` runs the hooks below on the staged files. To run
+# them on the whole repo without committing:
+#   pre-commit run --all-files
+#
+# Hooks may modify files (e.g. ruff --fix, gofmt) — when they do, the commit
+# is aborted and you re-stage / re-commit. Hook output makes it obvious.
+
+repos:
+  # Ruff: Python lint + import order + syntax modernization. Config lives
+  # in pyproject.toml [tool.ruff]. `--fix` auto-fixes safe issues; anything
+  # left over fails the commit until manually fixed.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+
+  # Go: gofmt formats; golangci-lint catches real bugs. Both run only over
+  # the sidecar/ tree (the only Go module).
+  - repo: https://github.com/dnephin/pre-commit-golang
+    rev: v0.5.1
+    hooks:
+      - id: go-fmt
+        files: ^sidecar/
+      - id: golangci-lint
+        files: ^sidecar/
+        args: ["--config=.golangci.yml"]
+        stages: [manual]
+
+  # Generic hygiene: trailing whitespace, end-of-file fixer, large-file
+  # guard. Cheap, catch real annoyances, no behavior change.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+        args: [--maxkb=10000]  # 10 MB; keeps checkpoint binaries out
+      - id: check-yaml
+        # docker-compose's `!reset` etc. is non-standard YAML; skip those.
+        exclude: ^(docker-compose.*\.yml|experiments/.*/docker-compose.*\.yml)$
+      - id: check-merge-conflict

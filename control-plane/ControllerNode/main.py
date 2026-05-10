@@ -1,17 +1,23 @@
 """StreamBed controller node - SQLite-backed API server."""
-from contextlib import asynccontextmanager
-
 import logging
 import os
+from contextlib import asynccontextmanager
+
 import uvicorn
+from db import (
+    deregister_device,
+    get_connection,
+    init_db,
+    register_device,
+    update_heartbeat,
+)
+from deploy import DeployError, DeviceNotFoundError, delete_container_from_device, deploy_to_device
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from health_monitor import HealthMonitor, create_and_start_monitor
 from pydantic import BaseModel
-
-from db import get_connection, init_db, register_device, deregister_device, update_heartbeat, get_cluster_deployments
-from deploy import DeployError, DeviceNotFoundError, deploy_to_device, delete_container_from_device
-from health_monitor import create_and_start_monitor, HealthMonitor
 from routing import assign_edge_to_least_loaded_server, assign_unrouted_edges
+
 from shared.interfaces.heartbeat_spec import HeartbeatStatus
 
 # Configure logging
@@ -169,6 +175,8 @@ def deploy_container(body: DeployRequest) -> dict:
     except DeviceNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except DeployError as e:
+        logger.error("[Controller] /deploy 502: %s (cluster=%s device=%s image=%s)",
+                     e, body.device_cluster, body.device_id, body.image)
         raise HTTPException(status_code=502, detail=str(e)) from e
 
 @app.delete("/delete")
@@ -182,6 +190,8 @@ def delete_container(body: DeleteRequest) -> dict:
     except DeviceNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except DeployError as e:
+        logger.error("[Controller] /delete 502: %s (cluster=%s device=%s)",
+                     e, body.device_cluster, body.device_id)
         raise HTTPException(status_code=502, detail=str(e)) from e
 
 @app.post("/heartbeat")
@@ -283,4 +293,3 @@ def list_deployments(device_cluster: str | None = None) -> dict:
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)
-

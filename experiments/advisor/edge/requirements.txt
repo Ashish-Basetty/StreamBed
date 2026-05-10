@@ -1,0 +1,12 @@
+# Runtime deps for advisor edge inference container.
+# Torch + sb3 are needed to load the teacher checkpoint and run the
+# student head. Crafter is pulled in transitively by SmallHead's import
+# chain (train_shared_head -> advisorlib.crafter_gym -> crafter); we
+# keep the import chain unchanged to avoid a refactor.
+# Pin to versions matching the local conda env that produced the teacher
+# checkpoint. SB3 < 2.4 can't deserialize FloatSchedule; gymnasium 1.x is
+# what crafter ships with in this env.
+numpy>=1.26,<3
+stable-baselines3>=2.8.0,<3
+gymnasium>=1.0,<2
+crafter==1.8.3

@@ -22,11 +22,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import struct
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
@@ -133,18 +133,26 @@ async def serve(args: argparse.Namespace, advisor: Advisor) -> None:
 
 
 def main():
+    # Defaults pull from env vars set by the StreamBed deployment daemon
+    # (see control-plane/DeploymentDaemon/main.py). CLI flags still win.
     p = argparse.ArgumentParser()
-    p.add_argument("--teacher", type=Path, required=True)
+    p.add_argument("--teacher", type=Path,
+                   default=Path(os.environ.get("TEACHER_PATH", "")) or None,
+                   required="TEACHER_PATH" not in os.environ)
     p.add_argument("--feed-host", default="0.0.0.0",
                    help="UDP host to listen on for incoming StreamFrames.")
-    p.add_argument("--feed-port", type=int, default=9101,
+    p.add_argument("--feed-port", type=int,
+                   default=int(os.environ.get("FEED_LISTEN_PORT", "9101")),
                    help="UDP port to listen on for incoming StreamFrames.")
-    p.add_argument("--advice-host", default="127.0.0.1",
+    p.add_argument("--advice-host",
+                   default=os.environ.get("SIDECAR_HOST", "127.0.0.1"),
                    help="UDP host to send advice to (edge inference's "
                         "advice receiver, or the local sidecar in Phase D).")
-    p.add_argument("--advice-port", type=int, default=9102,
+    p.add_argument("--advice-port", type=int,
+                   default=int(os.environ.get("SIDECAR_REVERSE_PORT", "9102")),
                    help="UDP port to send advice to.")
-    p.add_argument("--reply-every-n", type=int, default=1,
+    p.add_argument("--reply-every-n", type=int,
+                   default=int(os.environ.get("REPLY_EVERY_N", "1")),
                    help="Reply with advice on every Nth EMBD received. "
                         "N=1 (default) replies to all. N=0 disables replies "
                         "(advisor becomes a sink — wire path still exercised).")

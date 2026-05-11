@@ -24,7 +24,8 @@ def spawn_sidecar(
     device_id: str,
     role: str,
     image: str,
-    peer_address: str | None,
+    daemon_url: str,
+    peer_quic_port: int,
     local_udp_bind: str,
     quic_bind: str,
     local_server_udp: str,
@@ -35,9 +36,9 @@ def spawn_sidecar(
 
     Returns the new container name or None on failure.
 
-    `local_recv_udp_target` (edge role) and `server_reverse_udp_bind` (server
-    role) are optional reverse-path wiring; empty disables that half. See
-    sidecar/internal/{edge,server} for the protocol details.
+    Edge role: polls daemon_url/stream-target every 15 s for the current peer.
+    `local_recv_udp_target` (edge) and `server_reverse_udp_bind` (server) are
+    optional reverse-path wiring; empty disables that half.
     """
     name = _container_name(cluster, device_id)
     try:
@@ -62,9 +63,9 @@ def spawn_sidecar(
         "LOCAL_SERVER_UDP": local_server_udp,
         "DEVICE_ID": device_id,
         "DEVICE_CLUSTER": cluster,
+        "DAEMON_URL": daemon_url,
+        "PEER_QUIC_PORT": str(peer_quic_port),
     }
-    if peer_address:
-        env["PEER_ADDRESS"] = peer_address
     if local_recv_udp_target:
         env["LOCAL_RECV_UDP_TARGET"] = local_recv_udp_target
     if server_reverse_udp_bind:
@@ -85,7 +86,7 @@ def spawn_sidecar(
 
     try:
         client.containers.run(image, **run_kwargs)
-        logger.info(f"[Daemon] sidecar spawned: {name} role={role} peer={peer_address}")
+        logger.info(f"[Daemon] sidecar spawned: {name} role={role} daemon={daemon_url}")
         return name
     except docker.errors.ImageNotFound:
         logger.error(f"[Daemon] sidecar: image not found: {image}")

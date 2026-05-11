@@ -48,7 +48,6 @@ STREAM_PROXY_HOST = os.environ.get("STREAM_PROXY_HOST") or DAEMON_ADDRESS
 # 127.0.0.1:SIDECAR_LOCAL_UDP_PORT instead of writing direct UDP to the peer.
 STREAM_TRANSPORT = os.environ.get("STREAM_TRANSPORT", "udp").lower()
 SIDECAR_IMAGE = os.environ.get("SIDECAR_IMAGE", "ashishbasetty/streambed-quic-sidecar:latest")
-SIDECAR_PEER_ADDRESS = os.environ.get("SIDECAR_PEER_ADDRESS", "")  # e.g. "server-sidecar:4433"
 SIDECAR_LOCAL_UDP_PORT = int(os.environ.get("SIDECAR_LOCAL_UDP_PORT", "9050"))
 SIDECAR_QUIC_BIND_PORT = int(os.environ.get("SIDECAR_QUIC_BIND_PORT", "4433"))
 

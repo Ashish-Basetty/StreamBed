@@ -68,7 +68,6 @@ services:
       - VIDEO_SOURCE=synthetic
       - STREAM_TRANSPORT=${STREAM_TRANSPORT:-udp}
       - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
-      - SIDECAR_PEER_ADDRESS=streambed-default-server-001-sidecar:4433
     depends_on:
       - controller
     networks:
@@ -99,7 +98,6 @@ services:
       - VIDEO_SOURCE=synthetic
       - STREAM_TRANSPORT=${STREAM_TRANSPORT:-udp}
       - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
-      - SIDECAR_PEER_ADDRESS=streambed-default-server-001-sidecar:4433
     depends_on:
       - controller
     networks:
@@ -130,7 +128,6 @@ services:
       - VIDEO_SOURCE=synthetic
       - STREAM_TRANSPORT=${STREAM_TRANSPORT:-udp}
       - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
-      - SIDECAR_PEER_ADDRESS=streambed-default-server-001-sidecar:4433
     depends_on:
       - controller
     networks:

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -18,7 +19,8 @@ import (
 
 func main() {
 	role := flag.String("role", env("SIDECAR_ROLE", "edge"), "edge|server")
-	peer := flag.String("peer", env("PEER_ADDRESS", ""), "peer sidecar address (edge role)")
+	daemonURL := flag.String("daemon-url", env("DAEMON_URL", ""), "edge role: base URL of co-located daemon (e.g. http://host:9090)")
+	peerQUICPort := flag.String("peer-quic-port", env("PEER_QUIC_PORT", "4433"), "edge role: QUIC port on the server sidecar")
 	localUDP := flag.String("local-udp", env("LOCAL_UDP_BIND", "0.0.0.0:9050"), "local UDP bind (edge role)")
 	localRecv := flag.String("local-recv", env("LOCAL_RECV_UDP_TARGET", ""), "edge role: optional UDP host:port; non-FBCK control msgs are forwarded here for the local app")
 	bind := flag.String("bind", env("QUIC_BIND", "0.0.0.0:4433"), "QUIC bind (server role)")
@@ -44,13 +46,18 @@ func main() {
 	var err error
 	switch *role {
 	case "edge":
-		if *peer == "" {
-			log.Fatal("edge role requires PEER_ADDRESS / -peer")
+		if *daemonURL == "" {
+			log.Fatal("edge role requires DAEMON_URL / -daemon-url")
+		}
+		peerPort, perr := strconv.Atoi(*peerQUICPort)
+		if perr != nil {
+			log.Fatalf("invalid PEER_QUIC_PORT %q: %v", *peerQUICPort, perr)
 		}
 		err = edge.Run(ctx, edge.Config{
 			LocalUDPBind:       *localUDP,
 			LocalRecvUDPTarget: *localRecv,
-			PeerAddr:           *peer,
+			DaemonURL:          *daemonURL,
+			PeerQUICPort:       peerPort,
 			Metrics:            reg,
 		})
 	case "server":

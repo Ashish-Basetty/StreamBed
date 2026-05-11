@@ -13,8 +13,12 @@ package edge
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net"
+	"net/http"
+	"time"
 
 	"github.com/streambed/sidecar/internal/bandwidth"
 	"github.com/streambed/sidecar/internal/common"
@@ -25,33 +29,35 @@ import (
 
 type Config struct {
 	LocalUDPBind string // "0.0.0.0:9050"
-	PeerAddr     string // "server-sidecar:4433"
+	// DaemonURL is the base HTTP URL of the co-located deployment daemon
+	// (e.g. "http://streambed-daemon-edge1:9090"). Polled every 15 s for the
+	// current peer address via GET /stream-target.
+	DaemonURL    string
+	PeerQUICPort int // QUIC port on the server sidecar; peer = target_ip:PeerQUICPort
 	// LocalRecvUDPTarget is an optional "host:port" the edge sidecar will
 	// forward non-FBCK control messages to (e.g. CSTR advice originating from
 	// a server-side advisor). Empty disables the reverse-data path; FBCK keeps
 	// flowing into the bandwidth estimator either way.
 	LocalRecvUDPTarget string
-	TLS                any // *tls.Config kept generic to avoid stdlib import here
+	TLS                any // reserved; unused today
 	Metrics            *metrics.Registry
 	// Policy gates outbound payloads. If nil, Run constructs a
 	// RateLimit policy backed by a Composite(SentRate, RemoteRate) estimator.
 	Policy policy.Policy
 }
 
+// Run binds local UDP, waits for the daemon to publish an initial peer address,
+// then streams datagrams to that peer. When the daemon target changes (detected
+// by the 15 s poll) or the connection drops, the current QUIC connection is
+// torn down and a new one is dialed — the container never restarts.
 func Run(ctx context.Context, cfg Config) error {
 	if cfg.Metrics == nil {
 		cfg.Metrics = metrics.New()
 	}
 
-	// Local observation: rate of bytes we actually push out as QUIC datagrams.
-	// Sampled from the same atomic counter the metrics endpoint exposes.
 	sentRate := bandwidth.NewSampling(cfg.Metrics.DatagramBytesSent.Load, bandwidth.SamplingConfig{})
-
-	// Remote observation: server-reported received_bps from FBCK frames.
 	remoteRate := bandwidth.NewRemote(500_000)
-
 	estimator := bandwidth.NewComposite(sentRate, remoteRate)
-
 	if cfg.Policy == nil {
 		cfg.Policy = policy.NewRateLimit(estimator, 0)
 	}
@@ -65,30 +71,146 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer udp.Close()
-	log.Printf("edge: local UDP bound on %s, dialing peer %s", udp.LocalAddr(), cfg.PeerAddr)
 
-	tlsCfg, err := quictransport.DevTLSConfig(hostOf(cfg.PeerAddr), false)
-	if err != nil {
-		return err
-	}
-	conn, err := quictransport.Dial(ctx, cfg.PeerAddr, tlsCfg, cfg.Metrics)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	log.Printf("edge: QUIC handshake complete to %s", cfg.PeerAddr)
+	rerouteCh := make(chan string, 1)
+	go pollDaemonTarget(ctx, cfg.DaemonURL, cfg.PeerQUICPort, rerouteCh)
+	// sentRate samples bytes-sent for the lifetime of the sidecar, not per connection.
+	go func() { _ = sentRate.Run(ctx) }()
 
-	errc := make(chan error, 3)
-	go func() { errc <- pumpUDPToQUIC(ctx, udp, conn, cfg) }()
-	go func() { errc <- sentRate.Run(ctx) }()
-	go func() { errc <- pumpControlIntoBandwidth(ctx, conn, remoteRate, cfg.LocalRecvUDPTarget) }()
+	log.Printf("edge: local UDP bound on %s, waiting for daemon target at %s/stream-target", udp.LocalAddr(), cfg.DaemonURL)
 
+	// Block until the poll goroutine delivers the first valid peer address.
+	var peerAddr string
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case e := <-errc:
-		return e
+	case peerAddr = <-rerouteCh:
+		log.Printf("edge: initial peer %s", peerAddr)
 	}
+
+	for {
+		tlsCfg, err := quictransport.DevTLSConfig(hostOf(peerAddr), false)
+		if err != nil {
+			return err
+		}
+		conn, err := quictransport.Dial(ctx, peerAddr, tlsCfg, cfg.Metrics)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Printf("edge: dial %s failed: %v; retrying in 2s", peerAddr, err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case newPeer := <-rerouteCh:
+				peerAddr = newPeer
+			case <-time.After(2 * time.Second):
+			}
+			continue
+		}
+		log.Printf("edge: QUIC connected to %s", peerAddr)
+
+		connCtx, connCancel := context.WithCancel(ctx)
+		errc := make(chan error, 2)
+		go func() { errc <- pumpUDPToQUIC(connCtx, udp, conn, cfg) }()
+		go func() { errc <- pumpControlIntoBandwidth(connCtx, conn, remoteRate, cfg.LocalRecvUDPTarget) }()
+
+		var newPeer string
+		select {
+		case <-ctx.Done():
+			connCancel()
+			conn.Close()
+			return ctx.Err()
+		case newPeer = <-rerouteCh:
+			log.Printf("edge: rerouting -> %s", newPeer)
+		case e := <-errc:
+			if ctx.Err() != nil {
+				connCancel()
+				conn.Close()
+				return ctx.Err()
+			}
+			log.Printf("edge: pump exited (%v), reconnecting to %s", e, peerAddr)
+		}
+
+		connCancel()
+		conn.Close()
+		// Drain the second pump before starting new goroutines to avoid two
+		// concurrent readers on the same UDP socket.
+		select {
+		case <-errc:
+		case <-time.After(2 * time.Second):
+		}
+
+		if newPeer != "" {
+			peerAddr = newPeer
+		}
+	}
+}
+
+// pollDaemonTarget polls DaemonURL/stream-target every 15 s and sends a new
+// peer "ip:port" on ch whenever the resolved peer address changes. Fires once
+// immediately on startup so the first connection does not wait a full interval.
+//
+// The JSON response may include an optional "quic_port" field; if present it
+// overrides peerQUICPort for that target. This lets tests (and multi-port
+// deployments) specify exact QUIC ports without a separate env var.
+func pollDaemonTarget(ctx context.Context, daemonURL string, peerQUICPort int, ch chan<- string) {
+	url := daemonURL + "/stream-target"
+	client := &http.Client{Timeout: 5 * time.Second}
+	var currentPeer string
+
+	check := func() {
+		ip, port := fetchTarget(ctx, url, client)
+		if ip == "" {
+			return
+		}
+		if port == 0 {
+			port = peerQUICPort
+		}
+		peer := fmt.Sprintf("%s:%d", ip, port)
+		if peer == currentPeer {
+			return
+		}
+		currentPeer = peer
+		select {
+		case ch <- peer:
+		default: // previous reroute still pending; will be picked up next loop
+		}
+	}
+
+	check()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			check()
+		}
+	}
+}
+
+func fetchTarget(ctx context.Context, url string, client *http.Client) (ip string, quicPort int) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", 0
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("edge: poll daemon %s: %v", url, err)
+		return "", 0
+	}
+	defer resp.Body.Close()
+	var result struct {
+		TargetIP string `json:"target_ip"`
+		QUICPort int    `json:"quic_port,omitempty"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("edge: decode daemon response: %v", err)
+		return "", 0
+	}
+	return result.TargetIP, result.QUICPort
 }
 
 func pumpUDPToQUIC(ctx context.Context, udp *net.UDPConn, conn *quictransport.Conn, cfg Config) error {
@@ -107,22 +229,21 @@ func pumpUDPToQUIC(ctx context.Context, udp *net.UDPConn, conn *quictransport.Co
 		if payload == nil {
 			continue
 		}
+		var sendErr error
 		switch common.ClassifyPrefix(payload) {
 		case common.KindLossyData, common.KindLosslessData:
-			// CHNK + EMBD both ride the datagram channel — bulk, low-latency,
-			// best-effort. Drop policy is enforced upstream (CHNK only).
-			if err := conn.SendDatagram(payload); err != nil {
-				log.Printf("edge: send datagram: %v", err)
-			}
+			sendErr = conn.SendDatagram(payload)
 		case common.KindControl:
-			if err := conn.SendControl(payload); err != nil {
-				log.Printf("edge: send control: %v", err)
-			}
+			sendErr = conn.SendControl(payload)
 		default:
-			// Best-effort: unclassified payloads ride the datagram channel.
-			if err := conn.SendDatagram(payload); err != nil {
-				log.Printf("edge: send datagram (unclassified): %v", err)
+			sendErr = conn.SendDatagram(payload)
+		}
+		if sendErr != nil {
+			// On context cancellation the connection is being torn down; exit cleanly.
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
+			log.Printf("edge: send: %v", sendErr)
 		}
 	}
 }

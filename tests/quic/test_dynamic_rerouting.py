@@ -11,10 +11,13 @@ env var is needed and both servers can share the same loopback IP.
 from __future__ import annotations
 
 import socket
+import sys
 import time
+from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).parent))
 from conftest import (
     MockDaemonServer,
     SidecarProcess,

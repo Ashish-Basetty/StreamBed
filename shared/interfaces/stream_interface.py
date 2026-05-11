@@ -200,51 +200,6 @@ class StreamBedUDPProtocol(asyncio.DatagramProtocol):
         pass
 
 
-class StreamBedTCPSender(StreamSenderInterface):
-    """Send StreamFrames over TCP as length-prefixed serialized payloads."""
-
-    def __init__(self, use_jpeg: bool = False):
-        self._reader: asyncio.StreamReader | None = None
-        self._writer: asyncio.StreamWriter | None = None
-        self._use_jpeg = use_jpeg
-
-    async def connect(self, server_host: str, server_port: int) -> None:
-        self._reader, self._writer = await asyncio.open_connection(server_host, server_port)
-        print(f"[TCPSender] connected to {server_host}:{server_port}")
-
-    async def send(self, frame: StreamFrame) -> bool:
-        """Send each tag's worth of data as its own length-prefixed message.
-
-        A StreamFrame carrying both halves becomes two TCP messages: the
-        receiver (daemon TCP handler) processes each one independently and
-        derives the wire tag (CHNK vs EMBD) from which half is populated.
-        """
-        if not self._writer:
-            raise RuntimeError("sender is not connected")
-        try:
-            pieces = _split_for_wire(frame)
-            if not pieces:
-                return True
-            for _tag, sub in pieces:
-                payload = serialize_stream_frame(sub, self._use_jpeg)
-                self._writer.write(struct.pack(">I", len(payload)) + payload)
-            await self._writer.drain()
-            return True
-        except Exception as e:
-            print(f"[TCPSender] failed to send frame: {e}")
-            return False
-
-    async def close(self) -> None:
-        if self._writer:
-            self._writer.close()
-            try:
-                await self._writer.wait_closed()
-            except Exception:
-                pass
-            self._writer = None
-            self._reader = None
-
-
 class StreamBedUDPSender(StreamSenderInterface):
     def __init__(self, chunk_delay: float = 0.0, use_jpeg: bool = False):
         self._transport = None

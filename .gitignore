@@ -30,3 +30,5 @@ venv/
 *.zip
 
 sidecar/bin/
+
+*.db

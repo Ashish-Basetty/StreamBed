@@ -25,9 +25,7 @@ DEFAULT_HOST_PORT = int(os.environ.get("STREAMBED_HOST_PORT", "8080"))
 DEFAULT_CONTAINER_PORT = int(os.environ.get("STREAMBED_CONTAINER_PORT", "80"))
 STREAMBED_MEMORY_LIMIT = os.environ.get("STREAMBED_MEMORY_LIMIT", "6g")
 
-STREAM_PROXY_PORT = int(os.environ.get("STREAM_PROXY_PORT", "9000"))
-STREAM_TARGET_POLL_INTERVAL = float(os.environ.get("STREAM_TARGET_POLL_INTERVAL", "2.0"))
-BANDWIDTH_POLL_INTERVAL = float(os.environ.get("BANDWIDTH_POLL_INTERVAL", "1.0"))
+INGEST_UDP_PORT = int(os.environ.get("INGEST_UDP_PORT", "9000"))
 MAX_VIDEO_FPS = float(os.environ.get("MAX_VIDEO_FPS", "30"))
 MAX_FRAME_PAYLOAD_BYTES = int(os.environ.get("MAX_FRAME_PAYLOAD_BYTES", "50_000_000"))
 
@@ -42,11 +40,7 @@ STREAM_TARGET_PATH = _DATA_DIR / "stream-target.json"
 STREAMBED_CONFIG_HOST_PATH = os.environ.get("STREAMBED_CONFIG_HOST_PATH")
 STREAMBED_DATA_HOST_PATH = os.environ.get("STREAMBED_DATA_HOST_PATH")
 VIDEO_SOURCE = os.environ.get("VIDEO_SOURCE")
-STREAM_PROXY_HOST = os.environ.get("STREAM_PROXY_HOST") or DAEMON_ADDRESS
 
-# QUIC sidecar wiring. STREAM_TRANSPORT=quic flips the daemon's send path to
-# 127.0.0.1:SIDECAR_LOCAL_UDP_PORT instead of writing direct UDP to the peer.
-STREAM_TRANSPORT = os.environ.get("STREAM_TRANSPORT", "udp").lower()
 SIDECAR_IMAGE = os.environ.get("SIDECAR_IMAGE", "ashishbasetty/streambed-quic-sidecar:latest")
 SIDECAR_LOCAL_UDP_PORT = int(os.environ.get("SIDECAR_LOCAL_UDP_PORT", "9050"))
 SIDECAR_QUIC_BIND_PORT = int(os.environ.get("SIDECAR_QUIC_BIND_PORT", "4433"))

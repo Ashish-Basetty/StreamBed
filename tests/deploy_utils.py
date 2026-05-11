@@ -3,7 +3,6 @@ Deploy and delete inference containers via the controller API.
 Used by integration tests to bring up the full stack (controller + daemons + edge/server containers).
 """
 import logging
-from typing import List, Optional
 import subprocess
 import time
 
@@ -33,7 +32,7 @@ DEPLOY_STAGGER_SEC = 10  # Delay between deploys so PyTorch containers don't OOM
 def _wait_for_controller(controller_url: str) -> None:
     """Wait for controller /health to succeed."""
     base = controller_url.rstrip("/")
-    for i in range(WAIT_RETRIES):
+    for _ in range(WAIT_RETRIES):
         try:
             with httpx.Client(timeout=5) as client:
                 resp = client.get(f"{base}/health")
@@ -45,11 +44,11 @@ def _wait_for_controller(controller_url: str) -> None:
     raise RuntimeError(f"Controller at {controller_url} not ready after {WAIT_RETRIES} attempts")
 
 
-def _wait_for_daemons(daemon_ports: Optional[List[int]] = None) -> None:
+def _wait_for_daemons(daemon_ports: list[int] | None = None) -> None:
     """Wait for daemons to be reachable (they register with controller on startup)."""
     if daemon_ports is None:
         daemon_ports = [9090, 9091, 9092, 9093, 9094]
-    for i in range(WAIT_RETRIES):
+    for _ in range(WAIT_RETRIES):
         ready = 0
         for port in daemon_ports:
             try:
@@ -67,7 +66,7 @@ def _wait_for_daemons(daemon_ports: Optional[List[int]] = None) -> None:
 
 def _wait_for_devices_registered(
     controller_url: str,
-    expected_ids: List[str],
+    expected_ids: list[str],
     cluster: str,
 ) -> None:
     """Poll GET /devices until all expected device_ids are registered with the controller."""
@@ -198,19 +197,8 @@ def _inference_container_name_prefix(device_id: str) -> str:
     return f"streambed-{DEVICE_CLUSTER}-{device_id}-"
 
 
-def inference_container_running(device_id: str) -> bool:
-    """Check if the inference container for the given device_id is running."""
-    prefix = _inference_container_name_prefix(device_id)
-    result = subprocess.run(
-        ["docker", "ps", "--filter", f"name={prefix}", "--format", "{{.Names}}"],
-        capture_output=True,
-        text=True,
-    )
-    return bool(result.returncode == 0 and result.stdout.strip())
-
-
-def kill_inference_container(device_id: str) -> None:
-    """Kill the inference container for the given device_id (simulates crash)."""
+def _inference_containers(device_id: str) -> list[str]:
+    """Running inference container names for device_id, excluding the sidecar."""
     prefix = _inference_container_name_prefix(device_id)
     result = subprocess.run(
         ["docker", "ps", "--filter", f"name={prefix}", "--format", "{{.Names}}"],
@@ -218,8 +206,20 @@ def kill_inference_container(device_id: str) -> None:
         text=True,
     )
     if result.returncode != 0 or not result.stdout.strip():
+        return []
+    return [n for n in result.stdout.strip().split("\n") if not n.endswith("-sidecar")]
+
+
+def inference_container_running(device_id: str) -> bool:
+    """Check if the inference container for the given device_id is running."""
+    return bool(_inference_containers(device_id))
+
+
+def kill_inference_container(device_id: str) -> None:
+    """Kill the inference container for the given device_id (simulates crash)."""
+    names = _inference_containers(device_id)
+    if not names:
         raise RuntimeError(f"No running inference container found for {device_id}")
-    name = result.stdout.strip().split("\n")[0]
-    kill_result = subprocess.run(["docker", "kill", name], capture_output=True, text=True)
+    kill_result = subprocess.run(["docker", "kill", names[0]], capture_output=True, text=True)
     if kill_result.returncode != 0:
-        raise RuntimeError(f"Failed to kill {name}: {kill_result.stderr}")
+        raise RuntimeError(f"Failed to kill {names[0]}: {kill_result.stderr}")

@@ -8,7 +8,6 @@ import docker
 import httpx
 import uvicorn
 from daemon_config import (
-    BANDWIDTH_POLL_INTERVAL,
     CONTROLLER_URL,
     DAEMON_ADDRESS,
     DAEMON_PORT,
@@ -17,7 +16,7 @@ from daemon_config import (
     DEVICE_CLUSTER,
     DEVICE_ID,
     DEVICE_TYPE,
-    MAX_FRAME_PAYLOAD_BYTES,
+    INGEST_UDP_PORT,
     REGISTER_RETRIES,
     REGISTER_RETRY_DELAY,
     SIDECAR_IMAGE,
@@ -26,11 +25,7 @@ from daemon_config import (
     SIDECAR_RECV_PORT,
     SIDECAR_SERVER_REVERSE_BIND_PORT,
     STATE_PATH,
-    STREAM_PROXY_HOST,
-    STREAM_PROXY_PORT,
     STREAM_TARGET_PATH,
-    STREAM_TARGET_POLL_INTERVAL,
-    STREAM_TRANSPORT,
     STREAMBED_CONFIG_HOST_PATH,
     STREAMBED_DATA_HOST_PATH,
     STREAMBED_MEMORY_LIMIT,
@@ -39,10 +34,7 @@ from daemon_config import (
 from fastapi import FastAPI
 from pydantic import BaseModel
 from sidecar_supervisor import kill_sidecar, spawn_sidecar
-from stream_proxy_manager import StreamProxyManager
-from tcp_utils import _UDPSendOnlyProtocol, handle_tcp_stream
 
-from shared.bandwidth import SentRateBackend
 from shared.utils import _deployment_hash, _get_docker, _get_network
 
 # Configure logging (same format as controller)
@@ -110,41 +102,6 @@ def _save_stream_target(target_ip: str, target_port: int) -> None:
     )
 
 
-async def _stream_proxy_target_poll_loop(manager: StreamProxyManager) -> None:
-    """Periodically reload stream-target.json and update proxy destination."""
-    while True:
-        cfg = _load_stream_target()
-        if cfg and cfg.get("target_ip") and cfg.get("target_port") is not None:
-            manager.set_target(cfg["target_ip"], int(cfg["target_port"]))
-        await asyncio.sleep(STREAM_TARGET_POLL_INTERVAL)
-
-
-async def _bandwidth_poll_loop(manager: StreamProxyManager) -> None:
-    """Periodically poll get_target_bps from the estimator and update target_bitrate."""
-    while True:
-        estimator = manager.get_estimator()
-        if estimator is not None:
-            manager.update_target_bitrate(estimator.get_target_bps())
-        await asyncio.sleep(BANDWIDTH_POLL_INTERVAL)
-
-
-async def _run_stream_tcp_server(manager: StreamProxyManager) -> None:
-    """Start TCP server for edge connections and UDP transport for forwarding. Edge daemons only."""
-    loop = asyncio.get_running_loop()
-    udp_transport, _ = await loop.create_datagram_endpoint(
-        lambda: _UDPSendOnlyProtocol(),
-        local_addr=("0.0.0.0", 0),
-    )
-    manager.set_udp_transport(udp_transport)
-    server = await asyncio.start_server(
-        lambda r, w: handle_tcp_stream(r, w, manager, MAX_FRAME_PAYLOAD_BYTES),
-        "0.0.0.0",
-        STREAM_PROXY_PORT,
-    )
-    logger.info(f"[Daemon] Stream TCP server on 0.0.0.0:{STREAM_PROXY_PORT} (target from stream-target.json)")
-    await server.serve_forever()
-
-
 async def _register_with_retries() -> None:
     url = f"{CONTROLLER_URL.rstrip('/')}/register"
     payload = {
@@ -187,15 +144,6 @@ async def _deregister_with_retries() -> None:
     raise last_err
 
 
-async def _cancel_task(task: asyncio.Task | None) -> None:
-    if task:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-
 def _wait_running(client, name: str, timeout: int = 30) -> None:
     """Block until the named container status is 'running', or timeout expires."""
     import time
@@ -212,7 +160,7 @@ def _wait_running(client, name: str, timeout: int = 30) -> None:
 
 
 def _spawn_sidecar_for_role() -> str | None:
-    """Spawn the QUIC sidecar matching this daemon's role. No-op unless STREAM_TRANSPORT=quic.
+    """Spawn the QUIC sidecar matching this daemon's role.
 
     Reverse-path wiring is opt-in:
       - Edge sidecar gets LOCAL_RECV_UDP_TARGET=<DEVICE_ID>:SIDECAR_RECV_PORT
@@ -222,8 +170,6 @@ def _spawn_sidecar_for_role() -> str | None:
       - Server sidecar gets SERVER_REVERSE_UDP_BIND=0.0.0.0:SIDECAR_SERVER_REVERSE_BIND_PORT
         when SIDECAR_SERVER_REVERSE_BIND_PORT > 0.
     """
-    if STREAM_TRANSPORT != "quic":
-        return None
     role = "edge" if DEVICE_TYPE == "edge" else "server"
     local_recv_udp_target = ""
     server_reverse_udp_bind = ""
@@ -231,12 +177,8 @@ def _spawn_sidecar_for_role() -> str | None:
         local_recv_udp_target = f"{DEVICE_ID}:{SIDECAR_RECV_PORT}"
     if role == "server" and SIDECAR_SERVER_REVERSE_BIND_PORT > 0:
         server_reverse_udp_bind = f"0.0.0.0:{SIDECAR_SERVER_REVERSE_BIND_PORT}"
-    # The server sidecar must reach its local inference container by network
-    # alias, not 127.0.0.1 (which would loop within the sidecar's namespace).
-    local_server_udp = (
-        f"{DEVICE_ID}:{STREAM_PROXY_PORT}" if role == "server"
-        else f"127.0.0.1:{STREAM_PROXY_PORT}"
-    )
+    # Server sidecar delivers frames to the local inference container by network alias.
+    local_server_udp = f"{DEVICE_ID}:{INGEST_UDP_PORT}" if role == "server" else ""
     return spawn_sidecar(
         cluster=DEVICE_CLUSTER,
         device_id=DEVICE_ID,
@@ -256,26 +198,20 @@ def _spawn_sidecar_for_role() -> str | None:
 async def lifespan(app: FastAPI):
     await _register_with_retries()
 
-    poll_task = None
-    proxy_task = None
-    bandwidth_task = None
-    stream_proxy_manager = StreamProxyManager()
-    if DEVICE_TYPE == "edge":
-        # Edge owns the rate decision. Sole input is locally-observed throughput;
-        # QUIC's congestion control closes the loop at the transport layer, so
-        # received_bps app-feedback was redundant and is gone.
-        stream_proxy_manager.set_estimator(SentRateBackend())
-        poll_task = asyncio.create_task(_stream_proxy_target_poll_loop(stream_proxy_manager))
-        proxy_task = asyncio.create_task(_run_stream_tcp_server(stream_proxy_manager))
-        bandwidth_task = asyncio.create_task(_bandwidth_poll_loop(stream_proxy_manager))
-
     yield
 
+<<<<<<< HEAD
     await _cancel_task(bandwidth_task)
     await _cancel_task(poll_task)
     await _cancel_task(proxy_task)
     if proxy_task:
         stream_proxy_manager.close()
+=======
+    state = _load_state()
+    if state:
+        _stop_and_remove(f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-{state['container_hash']}")
+    kill_sidecar(cluster=DEVICE_CLUSTER, device_id=DEVICE_ID)
+>>>>>>> 6b6e5b0 (Removed UDP code)
     await _deregister_with_retries()
 
 
@@ -338,26 +274,16 @@ def deploy(body: DeployRequest) -> dict:
         }
         if VIDEO_SOURCE:
             container_env["VIDEO_SOURCE"] = VIDEO_SOURCE
+        sidecar_name = f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-sidecar"
+        container_env["SIDECAR_HOST"] = sidecar_name
         if DEVICE_TYPE == "edge":
-            container_env["STREAM_PROXY_HOST"] = STREAM_PROXY_HOST
-            container_env["STREAM_PROXY_PORT"] = str(STREAM_PROXY_PORT)
-        # QUIC sidecar coordinates for inference containers that talk UDP-direct
-        # to the sidecar (advisor flow). Backward-compatible: the existing
-        # edge/server containers ignore these. Edge gets SIDECAR_FEED_PORT
-        # (where to send features) + ADVICE_LISTEN_PORT (where the sidecar
-        # forwards advice in). Server gets SIDECAR_REVERSE_PORT (where to send
-        # advice) + FEED_LISTEN_PORT (where the sidecar forwards features in).
-        if STREAM_TRANSPORT == "quic":
-            sidecar_name = f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-sidecar"
-            container_env["SIDECAR_HOST"] = sidecar_name
-            if DEVICE_TYPE == "edge":
-                container_env["SIDECAR_FEED_PORT"] = str(SIDECAR_LOCAL_UDP_PORT)
-                if SIDECAR_RECV_PORT > 0:
-                    container_env["ADVICE_LISTEN_PORT"] = str(SIDECAR_RECV_PORT)
-            else:
-                container_env["FEED_LISTEN_PORT"] = str(STREAM_PROXY_PORT)
-                if SIDECAR_SERVER_REVERSE_BIND_PORT > 0:
-                    container_env["SIDECAR_REVERSE_PORT"] = str(SIDECAR_SERVER_REVERSE_BIND_PORT)
+            container_env["SIDECAR_FEED_PORT"] = str(SIDECAR_LOCAL_UDP_PORT)
+            if SIDECAR_RECV_PORT > 0:
+                container_env["ADVICE_LISTEN_PORT"] = str(SIDECAR_RECV_PORT)
+        else:
+            container_env["FEED_LISTEN_PORT"] = str(INGEST_UDP_PORT)
+            if SIDECAR_SERVER_REVERSE_BIND_PORT > 0:
+                container_env["SIDECAR_REVERSE_PORT"] = str(SIDECAR_SERVER_REVERSE_BIND_PORT)
         run_kwargs["environment"] = container_env
 
         container = client.containers.create(body.image, **run_kwargs)

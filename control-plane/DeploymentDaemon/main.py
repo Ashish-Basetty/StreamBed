@@ -200,18 +200,10 @@ async def lifespan(app: FastAPI):
 
     yield
 
-<<<<<<< HEAD
-    await _cancel_task(bandwidth_task)
-    await _cancel_task(poll_task)
-    await _cancel_task(proxy_task)
-    if proxy_task:
-        stream_proxy_manager.close()
-=======
     state = _load_state()
     if state:
         _stop_and_remove(f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-{state['container_hash']}")
     kill_sidecar(cluster=DEVICE_CLUSTER, device_id=DEVICE_ID)
->>>>>>> 6b6e5b0 (Removed UDP code)
     await _deregister_with_retries()
 
 

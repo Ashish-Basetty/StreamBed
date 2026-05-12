@@ -59,7 +59,6 @@ services:
       - DEVICE_TYPE=edge
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-edge1
-      - VIDEO_SOURCE=synthetic
       - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
     depends_on:
       - controller
@@ -87,7 +86,6 @@ services:
       - DEVICE_TYPE=edge
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-edge2
-      - VIDEO_SOURCE=synthetic
       - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
     depends_on:
       - controller
@@ -115,7 +113,6 @@ services:
       - DEVICE_TYPE=edge
       - DEVICE_CLUSTER=default
       - DAEMON_ADDRESS=daemon-edge3
-      - VIDEO_SOURCE=synthetic
       - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
     depends_on:
       - controller

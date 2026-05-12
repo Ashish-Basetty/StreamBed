@@ -1,8 +1,8 @@
 """SQLite database setup and access for the controller node."""
 import os
 import sqlite3
-from pathlib import Path
 import sys
+from pathlib import Path
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from shared.interfaces.heartbeat_spec import HeartbeatStatus
@@ -63,6 +63,11 @@ def init_db() -> None:
                 image TEXT NOT NULL,
                 host_port INTEGER,
                 container_port INTEGER,
+                managing_daemon_id TEXT,
+                container_hash TEXT,
+                container_name TEXT,
+                sidecar_name TEXT,
+                status TEXT DEFAULT 'running',
                 deployed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (device_cluster, device_id)
             );
@@ -239,21 +244,47 @@ def record_deployment(
     image: str,
     host_port: int | None = None,
     container_port: int | None = None,
+    managing_daemon_id: str | None = None,
+    container_hash: str | None = None,
+    container_name: str | None = None,
+    sidecar_name: str | None = None,
+    status: str = "running",
 ) -> None:
     """Record a successful deployment for a device."""
     conn = get_connection()
     try:
         conn.execute(
             """
-            INSERT INTO deployments (device_cluster, device_id, device_type, image, host_port, container_port, deployed_at)
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO deployments (
+                device_cluster, device_id, device_type, image, host_port, container_port,
+                managing_daemon_id, container_hash, container_name, sidecar_name, status, deployed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(device_cluster, device_id) DO UPDATE SET
+                device_type = excluded.device_type,
                 image = excluded.image,
                 host_port = excluded.host_port,
                 container_port = excluded.container_port,
+                managing_daemon_id = excluded.managing_daemon_id,
+                container_hash = excluded.container_hash,
+                container_name = excluded.container_name,
+                sidecar_name = excluded.sidecar_name,
+                status = excluded.status,
                 deployed_at = CURRENT_TIMESTAMP
             """,
-            (device_cluster, device_id, device_type, image, host_port, container_port),
+            (
+                device_cluster,
+                device_id,
+                device_type,
+                image,
+                host_port,
+                container_port,
+                managing_daemon_id,
+                container_hash,
+                container_name,
+                sidecar_name,
+                status,
+            ),
         )
         conn.commit()
     finally:
@@ -281,7 +312,8 @@ def get_last_deployment(
     conn = get_connection()
     try:
         row = conn.execute(
-            """SELECT device_cluster, device_id, device_type, image, host_port, container_port, deployed_at
+            """SELECT device_cluster, device_id, device_type, image, host_port, container_port,
+                      managing_daemon_id, container_hash, container_name, sidecar_name, status, deployed_at
                FROM deployments WHERE device_cluster = ? AND device_id = ?
                ORDER BY deployed_at DESC LIMIT 1""",
             (device_cluster, device_id),
@@ -308,7 +340,8 @@ def get_cluster_deployments(device_cluster: str) -> dict[str, dict]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT device_cluster, device_id, device_type, image, host_port, container_port, deployed_at
+            """SELECT device_cluster, device_id, device_type, image, host_port, container_port,
+                      managing_daemon_id, container_hash, container_name, sidecar_name, status, deployed_at
                FROM deployments WHERE device_cluster = ?
                ORDER BY device_id""",
             (device_cluster,),

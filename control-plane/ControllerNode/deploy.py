@@ -1,10 +1,9 @@
 """Deploy container logic: forwards deploy requests to the deployment daemon."""
-import time
-import os
-import httpx
 import re
+import time
 
-from db import delete_deployment, get_device_address, record_deployment
+import httpx
+from db import delete_deployment, get_device_address, get_last_deployment, record_deployment
 
 MAX_RETRIES = 3
 RETRY_DELAY_SEC = 2
@@ -23,6 +22,8 @@ def deploy_to_device(
     host_port: int | None = None,
     container_port: int | None = None,
     controller_url: str | None = None,
+    video_server_host: str | None = None,
+    video_server_port: int | None = None,
 ) -> dict:
     """
     Send deploy request to the daemon on the target device.
@@ -44,6 +45,10 @@ def deploy_to_device(
         payload["container_port"] = container_port
     if controller_url is not None:
         payload["controller_url"] = controller_url
+    if video_server_host is not None:
+        payload["video_server_host"] = video_server_host
+    if video_server_port is not None:
+        payload["video_server_port"] = video_server_port
 
     last_error: Exception | None = None
     for attempt in range(MAX_RETRIES):
@@ -54,7 +59,19 @@ def deploy_to_device(
                 data = resp.json()
                 if data.get("ok"):
                     try:
-                        record_deployment(device_cluster, device_id, device_type, image, host_port, container_port)
+                        record_deployment(
+                            device_cluster,
+                            device_id,
+                            device_type,
+                            image,
+                            host_port,
+                            container_port,
+                            managing_daemon_id=device_id,
+                            container_hash=data.get("container_hash"),
+                            container_name=data.get("container_name"),
+                            sidecar_name=data.get("sidecar_name"),
+                            status="running",
+                        )
                     except Exception as e:
                         raise DeployError(f"Deploy succeeded but failed to record: {e}") from e
                     return data
@@ -87,11 +104,18 @@ def delete_container_from_device(
         raise DeviceNotFoundError(f"Device {device_cluster}/{device_id} not found in registry")
     ip, port = addr
     url = f"http://{ip}:{port}/delete"
+    deployment = get_last_deployment(device_cluster, device_id)
+    payload: dict = {}
+    if deployment:
+        if deployment.get("container_name"):
+            payload["container_name"] = deployment["container_name"]
+        if deployment.get("sidecar_name"):
+            payload["sidecar_name"] = deployment["sidecar_name"]
     last_error: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
             with httpx.Client(timeout=TIMEOUT_SEC) as client:
-                resp = client.delete(url)
+                resp = client.request("DELETE", url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
                 if data.get("ok"):

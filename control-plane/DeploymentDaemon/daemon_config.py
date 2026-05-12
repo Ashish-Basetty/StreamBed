@@ -39,7 +39,8 @@ STREAM_TARGET_PATH = _DATA_DIR / "stream-target.json"
 # Optional - used when deploying edge containers
 STREAMBED_CONFIG_HOST_PATH = os.environ.get("STREAMBED_CONFIG_HOST_PATH")
 STREAMBED_DATA_HOST_PATH = os.environ.get("STREAMBED_DATA_HOST_PATH")
-VIDEO_SOURCE = os.environ.get("VIDEO_SOURCE")
+VIDEO_SERVER_HOST = os.environ.get("VIDEO_SERVER_HOST", "")
+VIDEO_SERVER_PORT = int(os.environ.get("VIDEO_SERVER_PORT", "9200"))
 
 SIDECAR_IMAGE = os.environ.get("SIDECAR_IMAGE", "ashishbasetty/streambed-quic-sidecar:latest")
 SIDECAR_LOCAL_UDP_PORT = int(os.environ.get("SIDECAR_LOCAL_UDP_PORT", "9050"))

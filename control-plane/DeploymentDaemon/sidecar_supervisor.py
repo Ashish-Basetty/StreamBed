@@ -9,6 +9,7 @@ import logging
 
 import docker
 
+from shared.docker_labels import ROLE_SIDECAR, managed_labels
 from shared.utils import _get_docker, _get_network
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,9 @@ def spawn_sidecar(
         "name": name,
         "detach": True,
         "environment": env,
+        # METADATA ONLY. The controller deployments table owns deployment
+        # state; labels are just a recovery handle for orphaned Docker resources.
+        "labels": managed_labels(cluster=cluster, device_id=device_id, role=ROLE_SIDECAR),
     }
     try:
         network = _get_network(client)

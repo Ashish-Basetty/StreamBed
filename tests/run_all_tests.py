@@ -3,16 +3,17 @@
 Run all StreamBed tests with hierarchical grouping.
 
 Usage:
-  python tests/run_all_tests.py              # Build+push infra images, then run all tests
+  python tests/run_all_tests.py              # Build+push sidecar image, then run all tests
   python tests/run_all_tests.py unit         # Run unit tests only (no build)
   python tests/run_all_tests.py integration  # Run integration tests (excl. Docker, no build)
   python tests/run_all_tests.py docker       # Run Docker integration tests (no build)
   python tests/run_all_tests.py go           # Run Go sidecar tests only (no build)
-  python tests/run_all_tests.py build        # Build+push infra images only (no tests)
+  python tests/run_all_tests.py build        # Build+push sidecar image only (no tests)
 
-Infra images built and pushed:
+Image built and pushed:
   ashishbasetty/streambed-quic-sidecar:latest  (Go sidecar, built from sidecar/)
-  streambed daemon images                       (rebuilt via docker compose build)
+
+Python service images are rebuilt by Docker test fixtures via `docker compose up --build`.
 """
 import subprocess
 import sys
@@ -23,8 +24,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SIDECAR_DIR = REPO_ROOT / "sidecar"
 SIDECAR_IMAGE = "ashishbasetty/streambed-quic-sidecar:latest"
-COMPOSE_FILES = ["-f", "docker-compose.yml",
-                 "-f", "experiments/advisor/docker-compose.advisor.yml"]
 
 
 def _run(cmd: list[str], cwd: Path = REPO_ROOT) -> int:
@@ -38,7 +37,7 @@ def run_go_tests() -> int:
 
 
 def build_and_push() -> int:
-    print("\n=== Building and pushing infra images ===")
+    print("\n=== Building and pushing sidecar image ===")
 
     rc = _run(["go", "test", "-race", "./..."], cwd=SIDECAR_DIR)
     if rc:
@@ -51,10 +50,7 @@ def build_and_push() -> int:
     rc = _run(["docker", "push", SIDECAR_IMAGE])
     if rc:
         return rc
-
-    rc = _run(["docker", "compose", *COMPOSE_FILES,
-               "build", "daemon-edge1", "daemon-server1"])
-    return rc
+    return 0
 
 
 def main():

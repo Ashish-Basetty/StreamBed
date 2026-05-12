@@ -1,0 +1,22 @@
+---
+description: Python environment for StreamBed
+alwaysApply: true
+---
+
+# Python Environment
+
+Use the `streambed` conda environment for Python commands in this repository.
+
+Examples:
+
+```bash
+conda run -n streambed python -m pytest tests/unit
+conda run -n streambed python path/to/script.py
+```
+
+Avoid relying on the system `python3` for tests; it may not have the project dependencies.
+
+# Test Failure Logs
+
+Docker/integration test failure logs are written under `tests/logs/`.
+When a Docker test fails, inspect the relevant timestamped log there before guessing from pytest output alone.

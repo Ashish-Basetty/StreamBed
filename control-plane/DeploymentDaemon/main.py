@@ -29,12 +29,14 @@ from daemon_config import (
     STREAMBED_CONFIG_HOST_PATH,
     STREAMBED_DATA_HOST_PATH,
     STREAMBED_MEMORY_LIMIT,
-    VIDEO_SOURCE,
+    VIDEO_SERVER_HOST,
+    VIDEO_SERVER_PORT,
 )
 from fastapi import FastAPI
 from pydantic import BaseModel
 from sidecar_supervisor import kill_sidecar, spawn_sidecar
 
+from shared.docker_labels import ROLE_INFERENCE, managed_label_filters, managed_labels
 from shared.utils import _deployment_hash, _get_docker, _get_network
 
 # Configure logging (same format as controller)
@@ -50,11 +52,18 @@ class DeployRequest(BaseModel):
     host_port: int | None = None  # defaults to STREAMBED_HOST_PORT
     container_port: int | None = None  # defaults to STREAMBED_CONTAINER_PORT
     controller_url: str | None = None  # defaults to CONTROLLER_URL
+    video_server_host: str | None = None  # overrides daemon's VIDEO_SERVER_HOST
+    video_server_port: int | None = None  # overrides daemon's VIDEO_SERVER_PORT
 
 
 class StreamTargetRequest(BaseModel):
     target_ip: str
     target_port: int
+
+
+class DeleteRequest(BaseModel):
+    container_name: str | None = None
+    sidecar_name: str | None = None
 
 
 def _load_state() -> dict | None:
@@ -73,15 +82,17 @@ def _save_state(container_hash: str, image: str) -> None:
     STATE_PATH.write_text(json.dumps({"container_hash": container_hash, "image": image}, indent=2))
 
 
-def _stop_and_remove(container_name: str) -> None:
-    """Stop and remove a container. Ignores errors (container may not exist)."""
+def _stop_and_remove(container_name: str) -> bool:
+    """Stop and remove a container. Returns False if it does not exist."""
     try:
         client = _get_docker()
         container = client.containers.get(container_name)
-        container.stop(timeout=30)
-        container.remove()
+        if container.status == "running":
+            container.stop(timeout=30)
+        container.remove(force=True)
+        return True
     except docker.errors.NotFound:
-        pass
+        return False
 
 
 def _load_stream_target() -> dict | None:
@@ -194,15 +205,49 @@ def _spawn_sidecar_for_role() -> str | None:
     )
 
 
+def _remove_managed_inference_containers(client: docker.DockerClient) -> int:
+    """Remove daemon-owned inference containers for this device.
+
+    CONTROLLER DB IS THE SOURCE OF TRUTH FOR DEPLOYMENT STATE.
+    LABELS BELOW ARE METADATA ONLY, USED ONLY AS A RECOVERY SWEEP FOR ORPHANED
+    DOCKER RESOURCES WHEN THE CONTROLLER/DAEMON STATE IS MISSING OR STALE.
+    """
+    prefix = f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-"
+    sidecar_name = f"{prefix}sidecar"
+    containers_by_id = {}
+    removed = 0
+    for container in client.containers.list(
+        all=True,
+        filters={
+            "label": managed_label_filters(
+                cluster=DEVICE_CLUSTER,
+                device_id=DEVICE_ID,
+                role=ROLE_INFERENCE,
+            )
+        },
+    ):
+        containers_by_id[container.id] = container
+    # Legacy fallback: pre-label containers used this deterministic prefix.
+    for container in client.containers.list(all=True):
+        if container.name.startswith(prefix) and container.name != sidecar_name:
+            containers_by_id[container.id] = container
+
+    for container in containers_by_id.values():
+        if _stop_and_remove(container.name):
+            removed += 1
+    return removed
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _register_with_retries()
 
     yield
 
-    state = _load_state()
-    if state:
-        _stop_and_remove(f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-{state['container_hash']}")
+    try:
+        _remove_managed_inference_containers(_get_docker())
+    except Exception:
+        logger.exception("[Daemon] failed to clean inference containers during shutdown")
     kill_sidecar(cluster=DEVICE_CLUSTER, device_id=DEVICE_ID)
     await _deregister_with_retries()
 
@@ -238,11 +283,8 @@ def deploy(body: DeployRequest) -> dict:
         # 1. Pull the new image (if this fails, old container stays running)
         client.images.pull(body.image)
 
-        # 2. Stop old container to free the host port (can't have two containers on same port)
-        state = _load_state()
-        if state:
-            old_container = f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-{state['container_hash']}"
-            _stop_and_remove(old_container)
+        # 2. Stop old/stale containers to free the host port.
+        _remove_managed_inference_containers(client)
 
         # 3. Run new container with port mapping, volumes, and memory limit (PyTorch needs ~1–2GB)
         run_kwargs = {
@@ -250,6 +292,13 @@ def deploy(body: DeployRequest) -> dict:
             "detach": True,
             "ports": {f"{container_port}/tcp": host_port},
             "mem_limit": STREAMBED_MEMORY_LIMIT,
+            # METADATA ONLY. The controller deployments table is authoritative;
+            # these labels are only for orphan cleanup/recovery.
+            "labels": managed_labels(
+                cluster=DEVICE_CLUSTER,
+                device_id=DEVICE_ID,
+                role=ROLE_INFERENCE,
+            ),
         }
         volumes = {}
         if STREAMBED_CONFIG_HOST_PATH:
@@ -263,9 +312,9 @@ def deploy(body: DeployRequest) -> dict:
             "DEVICE_ID": DEVICE_ID,
             "DEVICE_CLUSTER": DEVICE_CLUSTER,
             "CONTROLLER_URL": CONTROLLER_URL,
+            "VIDEO_SERVER_HOST": body.video_server_host or VIDEO_SERVER_HOST,
+            "VIDEO_SERVER_PORT": str(body.video_server_port or VIDEO_SERVER_PORT),
         }
-        if VIDEO_SOURCE:
-            container_env["VIDEO_SOURCE"] = VIDEO_SOURCE
         sidecar_name = f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-sidecar"
         container_env["SIDECAR_HOST"] = sidecar_name
         if DEVICE_TYPE == "edge":
@@ -295,7 +344,14 @@ def deploy(body: DeployRequest) -> dict:
         if sidecar_name:
             _wait_running(client, sidecar_name, timeout=30)
 
-        return {"ok": True, "container_hash": deploy_hash}
+        return {
+            "ok": True,
+            "device_cluster": DEVICE_CLUSTER,
+            "device_id": DEVICE_ID,
+            "container_hash": deploy_hash,
+            "container_name": new_container,
+            "sidecar_name": sidecar_name,
+        }
     except docker.errors.ImageNotFound:
         _stop_and_remove(new_container)
         logger.error("[Daemon] /deploy failed: image not found: %s", body.image)
@@ -310,24 +366,21 @@ def deploy(body: DeployRequest) -> dict:
         return {"ok": False, "error": str(e)}
 
 @app.delete("/delete")
-def delete() -> dict:
+def delete(body: DeleteRequest | None = None) -> dict:
     """Delete the streambed inference container(s) managed by this daemon, and the sidecar."""
     try:
         client = _get_docker()
-        containers = client.containers.list(filters={"status": "running"})
-        prefix = f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-"
-        sidecar_name = f"{prefix}sidecar"
-        # Inference containers only — exclude the sidecar; it's killed explicitly below.
-        containers = [
-            c for c in containers
-            if c.name.startswith(prefix) and c.name != sidecar_name
-        ]
-        if len(containers) == 0:
-            return {"ok": False, "error": "No containers running"}
-        for container in containers:
-            _stop_and_remove(container.name)
-        kill_sidecar(cluster=DEVICE_CLUSTER, device_id=DEVICE_ID)
-        return {"ok": True}
+        removed = 0
+        if body and body.container_name:
+            if _stop_and_remove(body.container_name):
+                removed += 1
+        else:
+            removed += _remove_managed_inference_containers(client)
+        if body and body.sidecar_name:
+            _stop_and_remove(body.sidecar_name)
+        else:
+            kill_sidecar(cluster=DEVICE_CLUSTER, device_id=DEVICE_ID)
+        return {"ok": True, "removed": removed}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

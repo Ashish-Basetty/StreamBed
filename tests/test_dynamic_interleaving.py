@@ -13,16 +13,16 @@ import pytest
 from tests.deploy_utils import (
     _wait_for_controller,
     _wait_for_daemons,
-    deploy_device,
     delete_device,
+    deploy_device,
 )
 
 # Only edge1 and server1 daemons are started for throttle test
 _THROTTLE_DAEMON_PORTS = [9090, 9093]
-from tests.docker_utils import DockerComposeManager
+from tests.docker_utils import DockerComposeManager, reap_streambed_runtime_containers
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_CONTROLLER_DB_PATH = _PROJECT_ROOT / "controller" / "data" / "controller.db"
+_CONTROLLER_DB_PATH = _PROJECT_ROOT / "control-plane" / "data" / "controller.db"
 
 CONTROLLER_URL = "http://localhost:8080"
 EDGE_DAEMON_URL = "http://localhost:9090"
@@ -39,12 +39,14 @@ def throttle_stack():
         compose_files=["docker-compose.yml", "docker-compose.throttle.yml"],
         project_name="streambed",
     )
+    reap_streambed_runtime_containers()
     manager.down_services()
     if _CONTROLLER_DB_PATH.exists():
         _CONTROLLER_DB_PATH.unlink()
 
     manager.up_services(
         services=["controller", "daemon-edge1", "daemon-server1", "throttle-proxy"],
+        flags={"build": True, "force_recreate": True},
     )
     time.sleep(10)
     _wait_for_controller(CONTROLLER_URL)
@@ -58,6 +60,7 @@ def throttle_stack():
         except Exception:
             pass
     manager.down_services()
+    reap_streambed_runtime_containers()
 
 
 def _put_stream_target(daemon_url: str, target_ip: str, target_port: int) -> None:
@@ -80,14 +83,19 @@ def _get_server_stored_frames() -> int:
 
 @pytest.mark.integration
 @pytest.mark.integration_docker
-def test_throttled_path_receives_fewer_frames(throttle_stack):
+def test_throttled_path_receives_fewer_frames(throttle_stack, mock_video_server):
     """
     With throttle proxy in path, server receives fewer frames than unthrottled.
     """
     # Deploy server first, then edge
     deploy_device("server-001", controller_url=CONTROLLER_URL)
     time.sleep(10)
-    deploy_device("edge-001", controller_url=CONTROLLER_URL)
+    deploy_device(
+        "edge-001",
+        controller_url=CONTROLLER_URL,
+        video_server_host=mock_video_server["host"],
+        video_server_port=mock_video_server["port"],
+    )
     time.sleep(10)
 
     # Point stream-target at throttle proxy (daemon sends to proxy, proxy forwards to server)

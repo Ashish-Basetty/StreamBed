@@ -95,6 +95,8 @@ class DeployRequest(BaseModel):
     image: str  # DockerHub image, e.g. "user/repo:tag"
     host_port: int | None = None  # defaults to daemon's STREAMBED_HOST_PORT
     container_port: int | None = None  # defaults to daemon's STREAMBED_CONTAINER_PORT
+    video_server_host: str | None = None  # edge-only TCP video source override
+    video_server_port: int | None = None
 
 class DeleteRequest(BaseModel):
     device_cluster: str
@@ -167,7 +169,9 @@ def deploy_container(body: DeployRequest) -> dict:
             body.image,
             body.host_port,
             body.container_port,
-            controller_url=os.environ.get("CONTROLLER_URL")
+            controller_url=os.environ.get("CONTROLLER_URL"),
+            video_server_host=body.video_server_host,
+            video_server_port=body.video_server_port,
         )
         return result
     except ValueError as e:
@@ -277,13 +281,15 @@ def list_deployments(device_cluster: str | None = None) -> dict:
     try:
         if device_cluster:
             rows = conn.execute(
-                """SELECT device_cluster, device_id, device_type, image, host_port, container_port, deployed_at
+                """SELECT device_cluster, device_id, device_type, image, host_port, container_port,
+                          managing_daemon_id, container_hash, container_name, sidecar_name, status, deployed_at
                    FROM deployments WHERE device_cluster = ?""",
                 (device_cluster,),
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT device_cluster, device_id, device_type, image, host_port, container_port, deployed_at
+                """SELECT device_cluster, device_id, device_type, image, host_port, container_port,
+                          managing_daemon_id, container_hash, container_name, sidecar_name, status, deployed_at
                    FROM deployments"""
             ).fetchall()
         return {"deployments": [dict(row) for row in rows]}

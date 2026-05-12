@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from shared.mock_video_server import MockVideoServer, _docker_host_address
 from tests.deploy_utils import (
     _wait_for_controller,
     _wait_for_daemons,
@@ -16,7 +17,7 @@ from tests.deploy_utils import (
     delete_device,
     deploy_all_inference,
 )
-from tests.docker_utils import DockerComposeManager
+from tests.docker_utils import DockerComposeManager, reap_streambed_runtime_containers
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _TEST_FAILURE_LOGS_DIR = _PROJECT_ROOT / "tests" / "logs"
@@ -29,6 +30,7 @@ _CONTROLLER_DB_PATHS = [
 ]
 
 _ALL_DEVICE_IDS = ["server-001", "server-002", "edge-001", "edge-002", "edge-003"]
+_MOCK_VIDEO_SERVER_PORT = 9200
 
 
 def _wipe_controller_db() -> None:
@@ -48,13 +50,29 @@ def _clean_controller_db_each_session():
     """Wipe controller.db before and after every test session, regardless of
     which fixtures the session uses. Prevents stale device/routing rows from
     leaking between runs."""
+    reap_streambed_runtime_containers()
     _wipe_controller_db()
     yield
+    reap_streambed_runtime_containers()
     _wipe_controller_db()
 
 
 @pytest.fixture(scope="session")
-def deployed_inference_stack():
+def mock_video_server():
+    """Run one host-side TCP video server that all edge containers can read from."""
+    server = MockVideoServer(port=_MOCK_VIDEO_SERVER_PORT)
+    server.start()
+    time.sleep(1)
+    yield {
+        "server": server,
+        "host": _docker_host_address(),
+        "port": _MOCK_VIDEO_SERVER_PORT,
+    }
+    server.stop()
+
+
+@pytest.fixture(scope="session")
+def deployed_inference_stack(mock_video_server):
     """
     Session-scoped fixture: brings up controller + daemons, deploys all inference
     containers, yields for tests, then deletes inference and tears down compose.
@@ -63,19 +81,25 @@ def deployed_inference_stack():
         compose_file="docker-compose.yml",
         project_name="streambed",
     )
+    reap_streambed_runtime_containers()
     manager.down_services()
     if _CONTROLLER_DB_PATH.exists():
         _CONTROLLER_DB_PATH.unlink()
 
-    manager.up_services()
+    manager.up_services(flags={"build": True, "force_recreate": True})
     time.sleep(10)  # Allow controller and daemons to start
 
-    deploy_all_inference(controller_url="http://localhost:8080")
+    deploy_all_inference(
+        controller_url="http://localhost:8080",
+        video_server_host=mock_video_server["host"],
+        video_server_port=mock_video_server["port"],
+    )
 
     yield manager
 
     delete_all_inference(controller_url="http://localhost:8080")
     manager.down_services()
+    reap_streambed_runtime_containers()
 
 
 @pytest.fixture(scope="module")
@@ -90,11 +114,12 @@ def deployment_stack():
     )
     # Tear down any prior stack (e.g. left running by a session-scoped fixture)
     # so the controller restarts and runs init_db() with a fresh schema.
+    reap_streambed_runtime_containers()
     manager.down_services()
     if _CONTROLLER_DB_PATH.exists():
         _CONTROLLER_DB_PATH.unlink()
 
-    manager.up_services()
+    manager.up_services(flags={"build": True, "force_recreate": True})
     time.sleep(10)
     _wait_for_controller("http://localhost:8080")
     _wait_for_daemons()
@@ -112,6 +137,7 @@ def deployment_stack():
         except Exception:
             pass
     manager.down_services()
+    reap_streambed_runtime_containers()
 
 
 def _save_controller_logs_on_failure(item, report):

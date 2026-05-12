@@ -1,25 +1,17 @@
 import asyncio
+import struct
 import sys
 import time
 import uuid
-
-import cv2
-import numpy as np
-
-# Suppress OpenCV VIDEOIO warnings when camera/video fails to open (e.g. in Docker)
-cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
-import httpx
-import uvicorn
 from contextlib import asynccontextmanager
+
+import httpx
+import numpy as np
+import uvicorn
 from fastapi import FastAPI
 
 sys.path.insert(0, "/app")
 
-from shared.inference.mobilenet import MobileNetV2Model
-from shared.storage.frame_store import FrameStore
-from shared.storage.ttl_manager import TTLManager
-from shared.api.retrieval import create_retrieval_router
-from shared.interfaces.stream_interface import StreamBedTCPSender, StreamFrame
 from edge_config import (
     API_HOST,
     API_PORT,
@@ -34,71 +26,79 @@ from edge_config import (
     STREAM_PROXY_PORT,
     TTL_MAX,
     TTL_MIN,
-    VIDEO_SOURCE,
+    VIDEO_SERVER_HOST,
+    VIDEO_SERVER_PORT,
 )
+from shared.api.retrieval import create_retrieval_router
+from shared.inference.mobilenet import MobileNetV2Model
+from shared.interfaces.stream_interface import StreamBedUDPSender, StreamFrame
+from shared.storage.frame_store import FrameStore
+from shared.storage.ttl_manager import TTLManager
+from shared.tcp_framing import CHUNK_MAGIC, read_message
 
 model = MobileNetV2Model(device=MODEL_DEVICE)
 store = FrameStore(base_dir=STORAGE_DIR)
 ttl_mgr = TTLManager(storage_path=STORAGE_DIR, max_ttl=TTL_MAX, min_ttl=TTL_MIN)
-sender = StreamBedTCPSender()
+sender = StreamBedUDPSender()
+
+_SHAPE_FMT = ">HHH"
+_SHAPE_SIZE = struct.calcsize(_SHAPE_FMT)
+_VIDEO_CONNECT_RETRY = 5
 
 
 async def video_capture_loop():
-    """Continuously capture frames, run inference, store, and stream."""
-    cap = None
-    if VIDEO_SOURCE.lower() in ("synthetic", "test"):
-        print("[Edge] Using synthetic frames (VIDEO_SOURCE=synthetic)")
-    else:
-        source = int(VIDEO_SOURCE) if VIDEO_SOURCE.isdigit() else VIDEO_SOURCE
-        cap = cv2.VideoCapture(source)
-        if not cap.isOpened():
-            print(f"[Edge] Cannot open video source {VIDEO_SOURCE}, using synthetic frames")
-            cap = None
+    """Connect to video server and process received frames."""
+    while True:
+        if not (VIDEO_SERVER_HOST and VIDEO_SERVER_HOST.strip()):
+            print("[Edge] VIDEO_SERVER_HOST not set, waiting...")
+            await asyncio.sleep(_VIDEO_CONNECT_RETRY)
+            continue
+        try:
+            reader, writer = await asyncio.open_connection(VIDEO_SERVER_HOST, VIDEO_SERVER_PORT)
+            print(f"[Edge] Connected to video server {VIDEO_SERVER_HOST}:{VIDEO_SERVER_PORT}")
+            try:
+                while True:
+                    tag, payload = await read_message(reader)
+                    if tag != CHUNK_MAGIC:
+                        continue
+                    h, w, c = struct.unpack(_SHAPE_FMT, payload[:_SHAPE_SIZE])
+                    frame = np.frombuffer(payload[_SHAPE_SIZE:], dtype=np.uint8).reshape(h, w, c)
 
-    try:
-        while True:
-            if cap is not None:
-                ret, frame = cap.read()
-                if not ret:
-                    # End of video file — loop back to start
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    await asyncio.sleep(0.01)
-                    continue
-            else:
-                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                    timestamp = time.time()
+                    frame_id = f"{DEVICE_ID}_{uuid.uuid4().hex[:12]}"
 
-            timestamp = time.time()
-            frame_id = f"{DEVICE_ID}_{uuid.uuid4().hex[:12]}"
+                    result = model.process_frame(frame)
+                    ttl = ttl_mgr.compute_ttl()
+                    store.store(
+                        frame_id, timestamp, frame, result.embedding,
+                        model.get_model_version(), ttl,
+                    )
 
-            result = model.process_frame(frame)
+                    sf = StreamFrame(
+                        timestamp=timestamp,
+                        frame=frame,
+                        embedding=result.embedding,
+                        model_version=model.get_model_version(),
+                        source_device_id=DEVICE_ID,
+                        frame_interleaving_rate=30.0,
+                    )
+                    sent = await sender.send(sf)
 
-            ttl = ttl_mgr.compute_ttl()
-            store.store(
-                frame_id, timestamp, frame, result.embedding,
-                model.get_model_version(), ttl,
-            )
-
-            sf = StreamFrame(
-                timestamp=timestamp,
-                frame=frame,
-                embedding=result.embedding,
-                model_version=model.get_model_version(),
-                source_device_id=DEVICE_ID,
-                frame_interleaving_rate=30.0,
-            )
-            sent = await sender.send(sf)
-
-            frame_count = store.count()
-            if frame_count % 10 == 1 or frame_count <= 5:
-                print(f"[Edge] Frame {frame_count} | {frame_id} | "
-                      f"label={result.label} conf={result.confidence:.3f} | "
-                      f"ttl={ttl:.0f}s | sent={sent}")
-
-            # ~30 fps cap
-            await asyncio.sleep(0.033)
-    finally:
-        if cap is not None:
-            cap.release()
+                    frame_count = store.count()
+                    if frame_count % 10 == 1 or frame_count <= 5:
+                        print(f"[Edge] Frame {frame_count} | {frame_id} | "
+                              f"label={result.label} conf={result.confidence:.3f} | "
+                              f"ttl={ttl:.0f}s | sent={sent}")
+            finally:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+        except (ConnectionRefusedError, OSError) as e:
+            print(f"[Edge] Video server {VIDEO_SERVER_HOST}:{VIDEO_SERVER_PORT} unreachable: {e}, "
+                  f"retrying in {_VIDEO_CONNECT_RETRY}s...")
+            await asyncio.sleep(_VIDEO_CONNECT_RETRY)
 
 
 async def ttl_cleanup_loop():

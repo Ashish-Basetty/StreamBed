@@ -54,12 +54,6 @@ _ADVISOR_ROOT = Path(__file__).resolve().parents[1]
 if str(_ADVISOR_ROOT) not in sys.path:
     sys.path.insert(0, str(_ADVISOR_ROOT))
 
-from advisorlib.tcp_framing import (  # noqa: E402
-    ACTN_MAGIC,
-    CHUNK_MAGIC,
-    read_message,
-    write_message,
-)
 from bench.train_shared_head import SmallHead  # noqa: E402
 
 # StreamBed shared interfaces — sender/receiver implementations we reuse
@@ -68,6 +62,12 @@ from shared.interfaces.stream_interface import (  # noqa: E402
     StreamBedUDPReceiver,
     StreamBedUDPSender,
     StreamFrame,
+)
+from shared.tcp_framing import (  # noqa: E402
+    ACTN_MAGIC,
+    CHUNK_MAGIC,
+    read_message,
+    write_message,
 )
 
 log = logging.getLogger("edge_inference")

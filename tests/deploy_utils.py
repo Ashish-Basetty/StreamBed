@@ -8,6 +8,9 @@ import time
 
 import httpx
 
+from shared.docker_labels import CLUSTER, MANAGED, ROLE, ROLE_INFERENCE
+from shared.docker_labels import DEVICE_ID as DEVICE_ID_LABEL
+
 logger = logging.getLogger(__name__)
 
 # Device config from docker-compose.yml (root)
@@ -88,7 +91,11 @@ def _wait_for_devices_registered(
     )
 
 
-def deploy_all_inference(controller_url: str = "http://localhost:8080") -> None:
+def deploy_all_inference(
+    controller_url: str = "http://localhost:8080",
+    video_server_host: str = "",
+    video_server_port: int = 9200,
+) -> None:
     """
     Deploy all inference containers (edge + server) to all daemons via the controller.
     Waits for controller and daemons to be ready, then POSTs deploy for each device.
@@ -108,6 +115,9 @@ def deploy_all_inference(controller_url: str = "http://localhost:8080") -> None:
                 "host_port": dev["host_port"],
                 "container_port": dev["container_port"],
             }
+            if dev["device_type"] == "edge" and video_server_host:
+                payload["video_server_host"] = video_server_host
+                payload["video_server_port"] = video_server_port
             resp = client.post(f"{base}/deploy", json=payload)
             if resp.status_code != 200:
                 try:
@@ -129,7 +139,9 @@ def deploy_all_inference(controller_url: str = "http://localhost:8080") -> None:
 def deploy_device(
     device_id: str,
     controller_url: str = "http://localhost:8080",
-) -> None:
+    video_server_host: str = "",
+    video_server_port: int = 9200,
+) -> dict:
     """Deploy a single device via the controller. Raises on failure."""
     dev = next((d for d in DEVICES if d["device_id"] == device_id), None)
     if not dev:
@@ -143,6 +155,9 @@ def deploy_device(
         "host_port": dev["host_port"],
         "container_port": dev["container_port"],
     }
+    if dev["device_type"] == "edge" and video_server_host:
+        payload["video_server_host"] = video_server_host
+        payload["video_server_port"] = video_server_port
     with httpx.Client(timeout=CONTROLLER_TIMEOUT) as client:
         resp = client.post(f"{base}/deploy", json=payload)
         resp.raise_for_status()
@@ -150,6 +165,7 @@ def deploy_device(
         if not data.get("ok"):
             raise RuntimeError(f"Deploy failed for {device_id}: {data.get('error', data)}")
     logger.info("Deployed %s", device_id)
+    return data
 
 
 def delete_device(
@@ -198,7 +214,25 @@ def _inference_container_name_prefix(device_id: str) -> str:
 
 
 def _inference_containers(device_id: str) -> list[str]:
-    """Running inference container names for device_id, excluding the sidecar."""
+    """Running inference container names for device_id, excluding the sidecar.
+
+    Prefer METADATA-ONLY Docker labels for discovery. Fall back to legacy names
+    so tests can clean up containers from older daemon builds.
+    """
+    label_filters = [
+        f"label={MANAGED}=true",
+        f"label={CLUSTER}={DEVICE_CLUSTER}",
+        f"label={DEVICE_ID_LABEL}={device_id}",
+        f"label={ROLE}={ROLE_INFERENCE}",
+    ]
+    cmd = ["docker", "ps"]
+    for f in label_filters:
+        cmd.extend(["--filter", f])
+    cmd.extend(["--format", "{{.Names}}"])
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip().split("\n")
+
     prefix = _inference_container_name_prefix(device_id)
     result = subprocess.run(
         ["docker", "ps", "--filter", f"name={prefix}", "--format", "{{.Names}}"],

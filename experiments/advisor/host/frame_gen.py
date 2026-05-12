@@ -26,10 +26,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from advisorlib.crafter_gym import CrafterGymEnv  # noqa: E402
-from advisorlib.tcp_framing import (  # noqa: E402
-    ACTN_MAGIC, CHUNK_MAGIC, read_message, write_message,
-)
 from bench.train_ppo import CRAFTER_ACHIEVEMENTS  # noqa: E402
+from shared.tcp_framing import (  # noqa: E402
+    ACTN_MAGIC,
+    CHUNK_MAGIC,
+    read_message,
+    write_message,
+)
 
 log = logging.getLogger("frame_gen")
 

@@ -25,9 +25,9 @@ Blending modes:
     blending as an ablation.
 
 Usage:
-  python bench/eval_with_advisor.py \\
-      --student checkpoints/students/shared_h4.pt \\
-      --teacher checkpoints/teacher.zip \\
+  python -m experiments.advisor.bench.eval_with_advisor \\
+      --student experiments/advisor/checkpoints/students/shared_h4.pt \\
+      --teacher experiments/advisor/checkpoints/teacher.zip \\
       --episodes 30 \\
       --cadences 1 5 10 20 inf \\
       --mode replacement
@@ -37,19 +37,16 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
 from stable_baselines3 import PPO
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from advisorlib.crafter_gym import CrafterGymEnv  # noqa: E402
-from bench.train_ppo import CRAFTER_ACHIEVEMENTS  # noqa: E402
-from bench.train_shared_head import SmallHead  # noqa: E402
+from experiments.advisor.advisorlib.crafter_gym import CrafterGymEnv
+from experiments.advisor.bench.train_ppo import CRAFTER_ACHIEVEMENTS
+from experiments.advisor.bench.train_shared_head import SmallHead
 
 
 def _parse_cadence(s: str) -> float:
@@ -90,7 +87,7 @@ def run_episode(
     step = 0
     advice_steps = 0
     advice_recomputes = 0
-    latest_advice: Optional[torch.Tensor] = None
+    latest_advice: torch.Tensor | None = None
     advice_age = math.inf
 
     done = False

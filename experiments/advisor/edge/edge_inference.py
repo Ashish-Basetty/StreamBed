@@ -18,7 +18,7 @@ If --advisor-host=none, the UDP path is skipped entirely and the edge
 plays solo (Phase B baseline mode).
 
 Usage:
-  python edge/edge_inference.py \\
+  python -m experiments.advisor.edge.edge_inference \\
       --teacher checkpoints/teacher.zip \\
       --student checkpoints/students/shared_h4.pt \\
       --port 9100 \\
@@ -36,7 +36,6 @@ import logging
 import math
 import os
 import struct
-import sys
 import time
 from pathlib import Path
 
@@ -44,26 +43,17 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 
-# Make the repo's `shared/` (StreamBed Python interface) importable.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-# Make experiments/advisor/ importable (advisorlib + bench).
-_ADVISOR_ROOT = Path(__file__).resolve().parents[1]
-if str(_ADVISOR_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ADVISOR_ROOT))
-
-from bench.train_shared_head import SmallHead  # noqa: E402
+from experiments.advisor.bench.train_shared_head import SmallHead
 
 # StreamBed shared interfaces — sender/receiver implementations we reuse
 # unchanged (no new code in StreamBed's protocol layer).
-from shared.interfaces.stream_interface import (  # noqa: E402
+from shared.heartbeat import heartbeat_loop
+from shared.interfaces.stream_interface import (
     StreamBedUDPReceiver,
     StreamBedUDPSender,
     StreamFrame,
 )
-from shared.tcp_framing import (  # noqa: E402
+from shared.tcp_framing import (
     ACTN_MAGIC,
     CHUNK_MAGIC,
     read_message,
@@ -338,6 +328,7 @@ async def serve(args: argparse.Namespace, inference: EdgeInference) -> None:
     sender: StreamBedUDPSender | None = None
     receiver: StreamBedUDPReceiver | None = None
     advice_task: asyncio.Task | None = None
+    heartbeat_task = asyncio.create_task(heartbeat_loop(model_version="advisor-edge"))
 
     advisor_disabled = (args.advisor_host or "").lower() == "none"
     if advisor_disabled:
@@ -370,6 +361,11 @@ async def serve(args: argparse.Namespace, inference: EdgeInference) -> None:
                 await advice_task
             except (asyncio.CancelledError, Exception):
                 pass
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except (asyncio.CancelledError, Exception):
+            pass
         if sender is not None:
             await sender.close()
         if receiver is not None:

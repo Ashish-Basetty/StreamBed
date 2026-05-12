@@ -10,7 +10,6 @@ score (log mean unlock rate over the 22 achievements) periodically.
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from pathlib import Path
 
@@ -20,9 +19,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-# Make `shared.*` importable when running this file directly.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from advisorlib.crafter_gym import CrafterGymEnv  # noqa: E402
+from experiments.advisor.advisorlib.crafter_gym import CrafterGymEnv
 
 CRAFTER_ACHIEVEMENTS = [
     "collect_coal", "collect_diamond", "collect_drink", "collect_iron",

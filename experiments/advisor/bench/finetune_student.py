@@ -8,7 +8,7 @@ acting greedily aren't quite the teacher's state distribution) and
 firms up the value head.
 
 Usage:
-  python bench/finetune_student.py \
+  python -m experiments.advisor.bench.finetune_student \
       --checkpoint checkpoints/ppo_student_bc.zip \
       --steps 1000000
 
@@ -17,7 +17,6 @@ Output: ppo_student_final.zip in --out-dir.
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from pathlib import Path
 
@@ -26,9 +25,8 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from advisorlib.crafter_gym import CrafterGymEnv  # noqa: E402
-from bench.train_ppo import CrafterScoreCallback, PRESETS  # noqa: E402
+from experiments.advisor.advisorlib.crafter_gym import CrafterGymEnv
+from experiments.advisor.bench.train_ppo import PRESETS, CrafterScoreCallback
 
 
 def make_env(rank: int, seed: int):

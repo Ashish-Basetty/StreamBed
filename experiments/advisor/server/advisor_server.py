@@ -24,7 +24,6 @@ import asyncio
 import logging
 import os
 import struct
-import sys
 import time
 from pathlib import Path
 
@@ -32,17 +31,8 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 
-# Make the repo's `shared/` importable.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-# Make experiments/advisor importable (for advisorlib + bench).
-_ADVISOR_ROOT = Path(__file__).resolve().parents[1]
-if str(_ADVISOR_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ADVISOR_ROOT))
-
-from shared.interfaces.stream_interface import (  # noqa: E402
+from shared.heartbeat import heartbeat_loop
+from shared.interfaces.stream_interface import (
     StreamBedUDPSender,
     StreamBedUDPServerReceiver,
 )
@@ -81,6 +71,7 @@ def encode_advice(timestamp: float, logits: np.ndarray) -> bytes:
 
 
 async def serve(args: argparse.Namespace, advisor: Advisor) -> None:
+    heartbeat_task = asyncio.create_task(heartbeat_loop(model_version="advisor-server"))
     receiver = StreamBedUDPServerReceiver()
     await receiver.listen(args.feed_host, args.feed_port)
     log.info("listening for features on %s:%d", args.feed_host, args.feed_port)
@@ -128,6 +119,11 @@ async def serve(args: argparse.Namespace, advisor: Advisor) -> None:
                 chnk_count = 0
                 last_log_ts = time.monotonic()
     finally:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except (asyncio.CancelledError, Exception):
+            pass
         await sender.close()
         await receiver.stop()
 

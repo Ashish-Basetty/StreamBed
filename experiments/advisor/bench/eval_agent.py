@@ -4,22 +4,20 @@ Runs N episodes, prints per-achievement unlock rate and the canonical
 Crafter score: S = exp(mean(log(1 + 100*rate))) - 1, in %.
 
 Usage:
-  python bench/eval_agent.py --checkpoint checkpoints/ppo_teacher_final.zip
-  python bench/eval_agent.py --random  # baseline
+  python -m experiments.advisor.bench.eval_agent --checkpoint experiments/advisor/checkpoints/ppo_teacher_final.zip
+  python -m experiments.advisor.bench.eval_agent --random  # baseline
 """
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from pathlib import Path
 
 import numpy as np
 from stable_baselines3 import PPO
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from advisorlib.crafter_gym import CrafterGymEnv  # noqa: E402
-from bench.train_ppo import CRAFTER_ACHIEVEMENTS  # noqa: E402
+from experiments.advisor.advisorlib.crafter_gym import CrafterGymEnv
+from experiments.advisor.bench.train_ppo import CRAFTER_ACHIEVEMENTS
 
 
 def evaluate(

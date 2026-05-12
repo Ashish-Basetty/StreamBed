@@ -13,16 +13,15 @@ knob varying is the advisor's reply cadence — i.e., how often the
 edge gets fresh advice over the wire.
 
 Usage:
-  python bench/sweep_cadence_wire.py \\
-      --student checkpoints/students/shared_h4.pt \\
-      --teacher checkpoints/teacher.zip \\
+  python -m experiments.advisor.bench.sweep_cadence_wire \\
+      --student experiments/advisor/checkpoints/students/shared_h4.pt \\
+      --teacher experiments/advisor/checkpoints/teacher.zip \\
       --cadences 1 5 10 20 inf \\
       --episodes 10
 """
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import math
 import os
@@ -32,12 +31,16 @@ import sys
 import time
 from pathlib import Path
 
-ADVISOR_FEED_PORT = 9101
-EDGE_ADVICE_PORT = 9102
-EDGE_TCP_PORT = 9100
+DEFAULT_ADVISOR_FEED_PORT = 9101
+DEFAULT_EDGE_ADVICE_PORT = 9102
+DEFAULT_EDGE_TCP_PORT = 9100
 
 
-def _project_root() -> Path:
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _advisor_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
@@ -59,6 +62,7 @@ def _spawn(cmd: list[str], log_path: Path) -> subprocess.Popen:
     f = log_path.open("w")
     return subprocess.Popen(
         cmd, stdout=f, stderr=subprocess.STDOUT,
+        cwd=_repo_root(),
         preexec_fn=os.setsid if os.name != "nt" else None,
     )
 
@@ -87,15 +91,21 @@ def run_cadence(
     args: argparse.Namespace,
 ) -> dict:
     """Run one cadence point. cadence=math.inf → no advisor."""
-    proj = _project_root()
+    proj = _advisor_root()
     advisor_off = (cadence == math.inf)
 
     cad_label = "inf" if advisor_off else int(cadence)
     print(f"\n=== cadence={cad_label} ===", flush=True)
 
-    advisor_log = proj / "logs" / f"sweep_advisor_n{cad_label}.log"
-    edge_log = proj / "logs" / f"sweep_edge_n{cad_label}.log"
-    frame_gen_out = proj / "checkpoints" / "eval" / f"sweep_n{cad_label}_{args.episodes}ep.json"
+    artifact_root = args.artifact_dir or proj
+    advisor_log = artifact_root / "logs" / f"sweep_advisor_n{cad_label}.log"
+    edge_log = artifact_root / "logs" / f"sweep_edge_n{cad_label}.log"
+    frame_gen_out = (
+        artifact_root
+        / "checkpoints"
+        / "eval"
+        / f"sweep_n{cad_label}_{args.episodes}ep.json"
+    )
 
     py = sys.executable
 
@@ -103,11 +113,11 @@ def run_cadence(
     advisor_p: subprocess.Popen | None = None
     if not advisor_off:
         advisor_cmd = [
-            py, "-u", "server/advisor_server.py",
+            py, "-u", "-m", "experiments.advisor.server.advisor_server",
             "--teacher", str(args.teacher),
-            "--feed-port", str(ADVISOR_FEED_PORT),
+            "--feed-port", str(args.advisor_feed_port),
             "--advice-host", "127.0.0.1",
-            "--advice-port", str(EDGE_ADVICE_PORT),
+            "--advice-port", str(args.edge_advice_port),
             "--reply-every-n", str(int(cadence)),
         ]
         advisor_p = _spawn(advisor_cmd, advisor_log)
@@ -117,10 +127,10 @@ def run_cadence(
 
     # Start edge inference.
     edge_cmd = [
-        py, "-u", "edge/edge_inference.py",
+        py, "-u", "-m", "experiments.advisor.edge.edge_inference",
         "--teacher", str(args.teacher),
         "--student", str(args.student),
-        "--port", str(EDGE_TCP_PORT),
+        "--port", str(args.edge_tcp_port),
         "--blend-mode", args.blend_mode,
         "--max-advice-age-s", str(args.max_advice_age_s),
         "--decay-tau-s", str(args.decay_tau_s),
@@ -130,8 +140,8 @@ def run_cadence(
     else:
         edge_cmd += [
             "--advisor-host", "127.0.0.1",
-            "--advisor-port", str(ADVISOR_FEED_PORT),
-            "--advice-listen-port", str(EDGE_ADVICE_PORT),
+            "--advisor-port", str(args.advisor_feed_port),
+            "--advice-listen-port", str(args.edge_advice_port),
         ]
 
     edge_p = _spawn(edge_cmd, edge_log)
@@ -143,15 +153,18 @@ def run_cadence(
 
     # Run frame_gen — capture its JSON output via --out.
     frame_gen_cmd = [
-        py, "-u", "host/frame_gen.py",
+        py, "-u", "-m", "experiments.advisor.host.frame_gen",
         "--episodes", str(args.episodes),
         "--seed", str(args.seed),
-        "--edge-port", str(EDGE_TCP_PORT),
+        "--edge-port", str(args.edge_tcp_port),
         "--out", str(frame_gen_out),
     ]
     fg = subprocess.run(
         frame_gen_cmd,
-        capture_output=True, text=True, timeout=args.frame_gen_timeout_s,
+        capture_output=True,
+        text=True,
+        timeout=args.frame_gen_timeout_s,
+        cwd=_repo_root(),
     )
     if fg.returncode != 0:
         _kill(edge_p)
@@ -191,9 +204,18 @@ def main():
     p.add_argument("--max-advice-age-s", type=float, default=60.0,
                    help="High default — we want the cadence itself to be "
                         "the limit, not the staleness gate.")
+    p.add_argument("--edge-tcp-port", type=int, default=DEFAULT_EDGE_TCP_PORT)
+    p.add_argument("--advisor-feed-port", type=int, default=DEFAULT_ADVISOR_FEED_PORT)
+    p.add_argument("--edge-advice-port", type=int, default=DEFAULT_EDGE_ADVICE_PORT)
     p.add_argument("--frame-gen-timeout-s", type=int, default=600)
+    p.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=None,
+        help="Directory for per-cadence logs/results. Default: experiments/advisor.",
+    )
     p.add_argument("--out", type=Path,
-                   default=_project_root() / "checkpoints" / "eval" /
+                   default=_advisor_root() / "checkpoints" / "eval" /
                    "cadence_sweep_wire.json")
     args = p.parse_args()
 

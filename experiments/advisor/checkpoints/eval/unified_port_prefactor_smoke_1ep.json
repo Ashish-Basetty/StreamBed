@@ -1,0 +1,77 @@
+{
+  "config": {
+    "student": "experiments/advisor/checkpoints/students/shared_h4.pt",
+    "teacher": "experiments/advisor/checkpoints/teacher.zip",
+    "episodes": 1,
+    "blend_mode": "replacement",
+    "max_advice_age_s": 60.0
+  },
+  "results": [
+    {
+      "episodes": 1,
+      "crafter_score": 9.049875621120892,
+      "avg_unlocks_per_ep": 11.0,
+      "avg_return": 10.1,
+      "avg_rt_ms": 1.163738271299689,
+      "avg_advice_pct": 0.9927797833935018,
+      "avg_advice_age_s": 0.0009649562180592593,
+      "wallclock_s": 1.167051076889038,
+      "edge_host": "127.0.0.1",
+      "edge_port": 19100,
+      "cadence": 1
+    },
+    {
+      "episodes": 1,
+      "crafter_score": 3.342487919371317,
+      "avg_unlocks_per_ep": 7.0,
+      "avg_return": 6.099999999999999,
+      "avg_rt_ms": 1.0319711238920408,
+      "avg_advice_pct": 0.9607843137254902,
+      "avg_advice_age_s": 0.004495318870133005,
+      "wallclock_s": 0.8512208461761475,
+      "edge_host": "127.0.0.1",
+      "edge_port": 19100,
+      "cadence": 5
+    },
+    {
+      "episodes": 1,
+      "crafter_score": 1.3143128565285358,
+      "avg_unlocks_per_ep": 4.0,
+      "avg_return": 3.099999999999999,
+      "avg_rt_ms": 1.0041208076941555,
+      "avg_advice_pct": 0.937888198757764,
+      "avg_advice_age_s": 0.009175553085245439,
+      "wallclock_s": 0.8561232089996338,
+      "edge_host": "127.0.0.1",
+      "edge_port": 19100,
+      "cadence": 10
+    },
+    {
+      "episodes": 1,
+      "crafter_score": 1.3143128565285358,
+      "avg_unlocks_per_ep": 4.0,
+      "avg_return": 3.099999999999999,
+      "avg_rt_ms": 1.2423866273992352,
+      "avg_advice_pct": 0.9009433962264151,
+      "avg_advice_age_s": 0.022002537564907214,
+      "wallclock_s": 1.037689208984375,
+      "edge_host": "127.0.0.1",
+      "edge_port": 19100,
+      "cadence": 20
+    },
+    {
+      "episodes": 1,
+      "crafter_score": 0.8763616626513666,
+      "avg_unlocks_per_ep": 3.0,
+      "avg_return": 2.099999999999999,
+      "avg_rt_ms": 1.0863001786147881,
+      "avg_advice_pct": 0.0,
+      "avg_advice_age_s": -1.0,
+      "wallclock_s": 0.916301965713501,
+      "edge_host": "127.0.0.1",
+      "edge_port": 19100,
+      "cadence": "inf"
+    }
+  ],
+  "wallclock_s": 29.80901598930359
+}

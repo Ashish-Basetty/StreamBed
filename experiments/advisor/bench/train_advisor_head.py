@@ -21,7 +21,7 @@ Pipeline:
        - per-action accuracy
 
 Usage:
-  python bench/train_advisor_head.py \
+  python -m experiments.advisor.bench.train_advisor_head \
       --student checkpoints/ppo_student_distilled.zip \
       --teacher checkpoints/ppo_teacher_final.zip \
       --rollouts 20000
@@ -29,7 +29,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from collections import Counter
 from pathlib import Path
@@ -41,10 +40,7 @@ import torch.nn.functional as F
 from stable_baselines3 import PPO
 from torch.utils.data import DataLoader, TensorDataset
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from advisorlib.crafter_gym import CrafterGymEnv  # noqa: E402
-from bench.train_ppo import CRAFTER_ACHIEVEMENTS  # noqa: E402  # for action count
-
+from experiments.advisor.advisorlib.crafter_gym import CrafterGymEnv
 
 N_ACTIONS = 17
 

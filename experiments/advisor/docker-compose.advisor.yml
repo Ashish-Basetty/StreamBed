@@ -28,7 +28,7 @@
 #                  controller router daemon-edge1 daemon-server1
 #   bash experiments/advisor/scripts/deploy_advisor.sh
 #   conda activate streambed && \
-#     python experiments/advisor/host/frame_gen.py \
+#     python -m experiments.advisor.host.frame_gen \
 #       --episodes 30 --edge-host 127.0.0.1 --edge-port 9100
 
 version: "3.9"

@@ -195,7 +195,7 @@ def _spawn_sidecar_for_role() -> str | None:
         device_id=DEVICE_ID,
         role=role,
         image=SIDECAR_IMAGE,
-        daemon_url=f"http://streambed-daemon-{DEVICE_ID}:{DAEMON_PORT}",
+        daemon_url=f"http://{DAEMON_ADDRESS}:{DAEMON_PORT}",
         peer_quic_port=SIDECAR_QUIC_BIND_PORT,
         local_udp_bind=f"0.0.0.0:{SIDECAR_LOCAL_UDP_PORT}",
         quic_bind=f"0.0.0.0:{SIDECAR_QUIC_BIND_PORT}",

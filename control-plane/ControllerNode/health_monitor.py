@@ -13,24 +13,22 @@ Features
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Optional
 
 import httpx
-
 from db import (
+    get_cluster_deployments,
+    get_cluster_status,
     get_connection,
     get_device_address,
     get_device_ip,
     get_device_status,
     get_last_deployment,
     set_device_status_evaluated,
-    get_cluster_deployments,
-    get_cluster_status,
 )
-from deploy import delete_container_from_device, deploy_to_device, DeployError
+from deploy import DeployError, delete_container_from_device, deploy_to_device
 from routing import assign_unrouted_edges, orphan_edges_for_server
-from shared.interfaces.heartbeat_spec import HeartbeatStatus
 
+from shared.interfaces.heartbeat_spec import HeartbeatStatus
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +40,7 @@ class HealthMonitor:
         self,
         heartbeat_timeout_secs: int,
         check_interval_secs: int = 5,
-        controller_url: Optional[str] = None,
+        controller_url: str | None = None,
     ):
         self.heartbeat_timeout = timedelta(seconds=heartbeat_timeout_secs)
         self.check_interval = check_interval_secs
@@ -59,10 +57,10 @@ class HealthMonitor:
         self._last_stream_target_sync: datetime | None = None
 
         # Track previous device states
-        self.prev_device_states: Dict[str, str] = {}
+        self.prev_device_states: dict[str, str] = {}
 
         # Restart protection
-        self.edge_restart_backoff: Dict[str, datetime] = {}
+        self.edge_restart_backoff: dict[str, datetime] = {}
         self.restart_cooldown = timedelta(seconds=5)
 
         # Reusable HTTP client
@@ -217,7 +215,7 @@ class HealthMonitor:
 
         return states
 
-    async def _process_cluster_health(self, cluster: str, states: Dict[str, str]):
+    async def _process_cluster_health(self, cluster: str, states: dict[str, str]):
         """Process the health of a cluster.
 
         A server is considered "failed for routing purposes" if it is either:
@@ -273,7 +271,7 @@ class HealthMonitor:
             pushed = 0
             for row in rows:
                 cluster, edge_id, target_server = row["source_cluster"], row["source_device"], row["target_device"]
-                target_ip = get_device_ip(cluster, target_server)
+                target_ip = self._stream_target_host(cluster, target_server)
                 if not target_ip:
                     logger.warning(f"{cluster}/{target_server}: no IP registered, skipping target push for {edge_id}")
                     continue
@@ -305,13 +303,25 @@ class HealthMonitor:
 
         for row in rows:
             edge_id, target_server = row["source_device"], row["target_device"]
-            target_ip = get_device_ip(cluster, target_server)
+            target_ip = self._stream_target_host(cluster, target_server)
             if not target_ip:
                 logger.error(
                     f"{cluster}/{edge_id}: cannot push target, no IP for {target_server}"
                 )
                 continue
             await self._update_edge_target(cluster, edge_id, target_ip, 9000)
+
+    def _stream_target_host(self, cluster: str, target_server: str) -> str | None:
+        """Return the address an edge sidecar should dial for its server peer.
+
+        If the server deployment has a sidecar, the QUIC peer is that sidecar
+        container. Fall back to the registered daemon address for older
+        deployments that predate sidecar runtime identity.
+        """
+        deployment = get_last_deployment(cluster, target_server)
+        if deployment and deployment.get("sidecar_name"):
+            return deployment["sidecar_name"]
+        return get_device_ip(cluster, target_server)
 
     async def _update_edge_target(
         self,
@@ -356,7 +366,7 @@ class HealthMonitor:
 async def create_and_start_monitor(
     heartbeat_timeout_secs: int = 30,
     check_interval_secs: int = 5,
-    controller_url: Optional[str] = None,
+    controller_url: str | None = None,
 ) -> HealthMonitor:
     """Factory to create and start monitor."""
 

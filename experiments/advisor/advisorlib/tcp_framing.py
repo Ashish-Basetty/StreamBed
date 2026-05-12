@@ -22,16 +22,8 @@ from __future__ import annotations
 
 import asyncio
 import struct
-import sys
-from pathlib import Path
 
-# Make the repo's `shared/` package importable for the chunk format
-# (this file lives at experiments/advisor/advisorlib/, repo root is 3 levels up).
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-from shared.stream_chunks import (  # noqa: E402
+from shared.stream_chunks import (
     CHUNK_MAGIC,
     CHUNK_SIZE,
     make_chunks,

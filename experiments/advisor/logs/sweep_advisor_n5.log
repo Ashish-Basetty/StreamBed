@@ -1,29 +1,8 @@
-2026-05-09 15:37:07,323 advisor_server INFO loading teacher=teacher.zip
-2026-05-09 15:37:08,322 advisor_server INFO advisor ready
-[UDPReceiver] listening on 0.0.0.0:9101
-2026-05-09 15:37:08,323 advisor_server INFO listening for features on 0.0.0.0:9101
-[UDPSender] handshake sent to ('127.0.0.1', 9102)
-2026-05-09 15:37:08,324 advisor_server INFO advice will go to 127.0.0.1:9102 (reply_every_n=5)
+2026-05-12 15:08:41,455 advisor_server INFO loading teacher=teacher.zip
+2026-05-12 15:08:42,004 advisor_server INFO advisor ready
+[UDPReceiver] listening on 0.0.0.0:19101
+2026-05-12 15:08:42,005 advisor_server INFO listening for features on 0.0.0.0:19101
+[UDPSender] handshake sent to ('127.0.0.1', 19102)
+2026-05-12 15:08:42,005 advisor_server INFO advice will go to 127.0.0.1:19102 (reply_every_n=5)
 [StreamBedUDPProtocol] error: [Errno 61] Connection refused
-[UDPReceiver] handshake from ('127.0.0.1', 54911)
-2026-05-09 15:37:13,634 advisor_server INFO rolling: embd=236 chnk=237 total_advised=47 (cadence_n=5)
-2026-05-09 15:37:18,674 advisor_server INFO rolling: embd=745 chnk=745 total_advised=196 (cadence_n=5)
-2026-05-09 15:37:24,155 advisor_server INFO rolling: embd=906 chnk=906 total_advised=377 (cadence_n=5)
-2026-05-09 15:37:29,165 advisor_server INFO rolling: embd=873 chnk=873 total_advised=552 (cadence_n=5)
-2026-05-09 15:37:34,229 advisor_server INFO rolling: embd=867 chnk=867 total_advised=725 (cadence_n=5)
-2026-05-09 15:37:39,804 advisor_server INFO rolling: embd=1133 chnk=1133 total_advised=952 (cadence_n=5)
-2026-05-09 15:37:44,807 advisor_server INFO rolling: embd=845 chnk=845 total_advised=1121 (cadence_n=5)
-2026-05-09 15:37:49,809 advisor_server INFO rolling: embd=1014 chnk=1014 total_advised=1323 (cadence_n=5)
-2026-05-09 15:37:55,295 advisor_server INFO rolling: embd=806 chnk=806 total_advised=1485 (cadence_n=5)
-2026-05-09 15:38:00,392 advisor_server INFO rolling: embd=878 chnk=878 total_advised=1660 (cadence_n=5)
-2026-05-09 15:38:05,687 advisor_server INFO rolling: embd=933 chnk=933 total_advised=1847 (cadence_n=5)
-2026-05-09 15:38:10,689 advisor_server INFO rolling: embd=831 chnk=831 total_advised=2013 (cadence_n=5)
-2026-05-09 15:38:15,793 advisor_server INFO rolling: embd=816 chnk=816 total_advised=2176 (cadence_n=5)
-2026-05-09 15:38:20,794 advisor_server INFO rolling: embd=1091 chnk=1091 total_advised=2394 (cadence_n=5)
-2026-05-09 15:38:25,796 advisor_server INFO rolling: embd=869 chnk=869 total_advised=2568 (cadence_n=5)
-2026-05-09 15:38:30,798 advisor_server INFO rolling: embd=799 chnk=799 total_advised=2728 (cadence_n=5)
-2026-05-09 15:38:35,890 advisor_server INFO rolling: embd=822 chnk=822 total_advised=2892 (cadence_n=5)
-2026-05-09 15:38:41,333 advisor_server INFO rolling: embd=960 chnk=960 total_advised=3084 (cadence_n=5)
-2026-05-09 15:38:46,333 advisor_server INFO rolling: embd=1024 chnk=1024 total_advised=3289 (cadence_n=5)
-2026-05-09 15:38:51,634 advisor_server INFO rolling: embd=824 chnk=824 total_advised=3454 (cadence_n=5)
-2026-05-09 15:38:57,005 advisor_server INFO rolling: embd=971 chnk=971 total_advised=3648 (cadence_n=5)
+[UDPReceiver] handshake from ('127.0.0.1', 49872)

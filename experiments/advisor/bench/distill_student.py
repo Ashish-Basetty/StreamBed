@@ -1,7 +1,7 @@
 """Distill the trained teacher into a small student via behavior cloning.
 
 Usage:
-  python bench/distill_student.py \
+  python -m experiments.advisor.bench.distill_student \
       --teacher checkpoints/ppo_teacher_final.zip \
       --rollouts 100000 \
       --epochs 5
@@ -23,7 +23,6 @@ teacher continues to live on the server and emits CSTM_RELIABLE advice.
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from pathlib import Path
 
@@ -33,9 +32,8 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 from torch.utils.data import DataLoader, TensorDataset
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from advisorlib.crafter_gym import CrafterGymEnv  # noqa: E402
-from bench.train_ppo import PRESETS  # noqa: E402
+from experiments.advisor.advisorlib.crafter_gym import CrafterGymEnv
+from experiments.advisor.bench.train_ppo import PRESETS
 
 
 def collect_teacher_rollouts(
@@ -160,7 +158,7 @@ def main():
     obs, acts = collect_teacher_rollouts(teacher, args.rollouts, seed=args.seed)
     uniq = np.unique(acts, return_counts=True)
     print(f"[distill] obs={obs.shape} acts: unique={len(uniq[0])} "
-          f"top={dict(zip(uniq[0][:5].tolist(), uniq[1][:5].tolist()))}")
+          f"top={dict(zip(uniq[0][:5].tolist(), uniq[1][:5].tolist(), strict=False))}")
 
     student = build_student_for_bc(args.seed)
     print(f"[distill] BC training for {args.epochs} epochs")

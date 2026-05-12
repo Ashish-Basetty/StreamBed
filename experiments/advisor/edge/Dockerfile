@@ -9,8 +9,7 @@
 # StreamBed sidecar. Outbound features go to SIDECAR_HOST:SIDECAR_FEED_PORT
 # (set by the deployment daemon at /deploy time).
 #
-# Container layout mirrors the repo so edge_inference.py's parents[3] /
-# parents[1] sys.path inserts resolve correctly:
+# Container layout mirrors the repo so module-style imports resolve correctly:
 #   /app/                          ← _REPO_ROOT (parents[3])
 #   /app/shared/...
 #   /app/experiments/advisor/      ← _ADVISOR_ROOT (parents[1])
@@ -38,11 +37,12 @@ RUN pip install --no-cache-dir \
 # StreamBed shared interfaces (sender/receiver, stream framing, chunk codec).
 COPY shared/ /app/shared/
 
-# Advisor library + bench module + edge inference script. Layout mirrors the
-# repo so the script's _REPO_ROOT / _ADVISOR_ROOT calculations work.
+# Advisor library + bench module + edge inference script.
 COPY experiments/advisor/advisorlib/ /app/experiments/advisor/advisorlib/
 COPY experiments/advisor/bench/      /app/experiments/advisor/bench/
 COPY experiments/advisor/edge/       /app/experiments/advisor/edge/
+COPY experiments/__init__.py         /app/experiments/__init__.py
+COPY experiments/advisor/__init__.py /app/experiments/advisor/__init__.py
 
 # Bake checkpoints into the image so /deploy doesn't need a shared volume.
 COPY experiments/advisor/checkpoints/teacher.zip          /app/experiments/advisor/checkpoints/teacher.zip
@@ -56,4 +56,4 @@ ENV TEACHER_PATH=/app/experiments/advisor/checkpoints/teacher.zip \
 
 EXPOSE 9100/tcp 9102/udp
 
-CMD ["python", "-u", "/app/experiments/advisor/edge/edge_inference.py"]
+CMD ["python", "-u", "-m", "experiments.advisor.edge.edge_inference"]

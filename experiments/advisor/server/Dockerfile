@@ -8,9 +8,8 @@
 # sends advice to SIDECAR_HOST:SIDECAR_REVERSE_PORT — both set by the
 # deployment daemon when /deploy launches the container.
 #
-# Container layout mirrors the repo so advisor_server.py's parents[3] /
-# parents[1] sys.path inserts resolve correctly. See edge/Dockerfile for the
-# mirroring rationale.
+# Container layout mirrors the repo so module-style imports resolve correctly.
+# See edge/Dockerfile for the mirroring rationale.
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -32,6 +31,8 @@ COPY shared/ /app/shared/
 COPY experiments/advisor/advisorlib/ /app/experiments/advisor/advisorlib/
 COPY experiments/advisor/bench/      /app/experiments/advisor/bench/
 COPY experiments/advisor/server/     /app/experiments/advisor/server/
+COPY experiments/__init__.py         /app/experiments/__init__.py
+COPY experiments/advisor/__init__.py /app/experiments/advisor/__init__.py
 
 # Server only needs the teacher; it runs teacher.policy.mlp_extractor +
 # action_net on incoming features to produce advice.
@@ -43,4 +44,4 @@ ENV TEACHER_PATH=/app/experiments/advisor/checkpoints/teacher.zip \
 
 EXPOSE 9000/udp
 
-CMD ["python", "-u", "/app/experiments/advisor/server/advisor_server.py"]
+CMD ["python", "-u", "-m", "experiments.advisor.server.advisor_server"]

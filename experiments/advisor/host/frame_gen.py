@@ -9,7 +9,7 @@ the edge container over a TCP socket using StreamBed-style framing
 could sniff or fake either side.
 
 Phase B usage (no advisor yet):
-  python host/frame_gen.py --episodes 30
+  python -m experiments.advisor.host.frame_gen --episodes 30
 """
 from __future__ import annotations
 
@@ -18,16 +18,14 @@ import asyncio
 import base64
 import json
 import logging
-import sys
 import time
 from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from advisorlib.crafter_gym import CrafterGymEnv  # noqa: E402
-from bench.train_ppo import CRAFTER_ACHIEVEMENTS  # noqa: E402
-from shared.tcp_framing import (  # noqa: E402
+from experiments.advisor.advisorlib.crafter_gym import CrafterGymEnv
+from experiments.advisor.bench.train_ppo import CRAFTER_ACHIEVEMENTS
+from shared.tcp_framing import (
     ACTN_MAGIC,
     CHUNK_MAGIC,
     read_message,

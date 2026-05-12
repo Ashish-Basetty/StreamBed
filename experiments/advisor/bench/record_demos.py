@@ -4,7 +4,7 @@ Runs one episode per cadence in-process (no wire), collects obs frames,
 overlays a HUD, and saves one MP4 per cadence.
 
 Usage:
-  python bench/record_demos.py \
+  python -m experiments.advisor.bench.record_demos \
       --student checkpoints/students/shared_h16.pt \
       --teacher checkpoints/teacher.zip \
       --cadences 1 5 10 20 inf \
@@ -15,9 +15,7 @@ from __future__ import annotations
 
 import argparse
 import math
-import sys
 from pathlib import Path
-from typing import Optional
 
 import imageio
 import numpy as np
@@ -25,9 +23,8 @@ import torch
 from PIL import Image, ImageDraw, ImageFont
 from stable_baselines3 import PPO
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from advisorlib.crafter_gym import CrafterGymEnv  # noqa: E402
-from bench.train_shared_head import SmallHead  # noqa: E402
+from experiments.advisor.advisorlib.crafter_gym import CrafterGymEnv
+from experiments.advisor.bench.train_shared_head import SmallHead
 
 _FONT: ImageFont.ImageFont | None = None
 
@@ -52,7 +49,7 @@ def _overlay(frame: np.ndarray, cadence: str, step: int, unlocks: int,
     font = _font(max(10, scale * 3))
 
     cad_str = f"cadence={cadence}"
-    adv_str = f"advice: {'ON  age={:.0f}ms'.format(advice_age_s * 1000) if advice_used else 'OFF'}"
+    adv_str = f"advice: {f'ON  age={advice_age_s * 1000:.0f}ms' if advice_used else 'OFF'}"
     step_str = f"step={step}  unlocks={unlocks}"
 
     bg = (0, 0, 0, 160)
@@ -88,7 +85,7 @@ def run_episode(
     frames: list[np.ndarray] = []
     step = 0
     ep_unlocks: set[str] = set()
-    latest_advice: Optional[torch.Tensor] = None
+    latest_advice: torch.Tensor | None = None
     advice_ts: float = -math.inf
     advice_used = False
     advice_age_s = 0.0

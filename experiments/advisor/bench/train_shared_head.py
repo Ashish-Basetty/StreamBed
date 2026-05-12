@@ -20,15 +20,14 @@ Outputs:
   - Optional shared_student_eval.json with Crafter score.
 
 Usage:
-  python bench/train_shared_head.py \\
-      --teacher checkpoints/ppo_teacher_final.zip \\
+  python -m experiments.advisor.bench.train_shared_head \\
+      --teacher experiments/advisor/checkpoints/ppo_teacher_final.zip \\
       --rollouts 50000 --epochs 8 --eval-episodes 30
 """
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 
@@ -39,9 +38,8 @@ import torch.nn.functional as F
 from stable_baselines3 import PPO
 from torch.utils.data import DataLoader, TensorDataset
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from advisorlib.crafter_gym import CrafterGymEnv  # noqa: E402
-from bench.train_ppo import CRAFTER_ACHIEVEMENTS  # noqa: E402
+from experiments.advisor.advisorlib.crafter_gym import CrafterGymEnv
+from experiments.advisor.bench.train_ppo import CRAFTER_ACHIEVEMENTS
 
 N_ACTIONS = 17
 
@@ -224,7 +222,7 @@ def main():
     print(f"[shared] collecting {args.rollouts} (frame, teacher_action) pairs")
     frames, acts = collect_teacher_data(teacher, args.rollouts, seed=args.seed)
 
-    print(f"[shared] encoding all frames once via teacher.encoder")
+    print("[shared] encoding all frames once via teacher.encoder")
     feats = encode_frames(teacher, frames)
     print(f"[shared] feats={feats.shape}")
 
@@ -245,7 +243,7 @@ def main():
 
     metrics = evaluate_offline(head, feats[eval_idx], acts[eval_idx])
     print()
-    print(f"== held-out offline eval ==")
+    print("== held-out offline eval ==")
     print(f"  n samples:    {metrics['n']}")
     print(f"  argmax acc:   {metrics['argmax_acc']:.3f}")
     print(f"  top-3 acc:    {metrics['top3_acc']:.3f}")
@@ -258,7 +256,7 @@ def main():
         crafter_metrics = evaluate_in_crafter(teacher, head, args.eval_episodes,
                                               seed=42)
         print()
-        print(f"== Crafter end-to-end ==")
+        print("== Crafter end-to-end ==")
         print(f"  episodes:        {crafter_metrics['episodes']}")
         print(f"  Crafter score:   {crafter_metrics['crafter_score']:.2f}")
         print(f"  avg unlocks/ep:  {crafter_metrics['avg_unlocks_per_ep']:.2f}")

@@ -96,7 +96,7 @@ flowed back over the control stream). Phase D now ships:
 4. **Advisor inference Dockerfiles.** `experiments/advisor/edge/Dockerfile`
    and `experiments/advisor/server/Dockerfile` build CPU-only Python images
    with teacher.zip + shared_h4.pt baked in. Container layout mirrors the
-   repo so the scripts' `parents[3]` / `parents[1]` sys.path inserts work.
+   repo so module-style imports work from `/app`.
 5. **`docker-compose.advisor.yml`** overlay flips daemon-edge1 and
    daemon-server1 to `STREAM_TRANSPORT=quic` with reverse-path ports set,
    declares both inference images as `manual`-profile build targets, and
@@ -125,7 +125,7 @@ bash experiments/advisor/scripts/deploy_advisor.sh
 
 # 4. Drive Crafter from the host.
 conda activate streambed
-python experiments/advisor/host/frame_gen.py \
+python -m experiments.advisor.host.frame_gen \
        --episodes 30 --edge-host 127.0.0.1 --edge-port 9100
 ```
 

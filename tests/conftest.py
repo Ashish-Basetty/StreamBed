@@ -20,6 +20,21 @@ from tests.deploy_utils import (
 from tests.docker_utils import DockerComposeManager, reap_streambed_runtime_containers
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--keep-docker",
+        action="store_true",
+        default=False,
+        help="Leave Docker Compose services and runtime containers up after tests "
+        "(skip down, reap, and related fixture teardown).",
+    )
+
+
+@pytest.fixture(scope="session")
+def keep_docker(request: pytest.FixtureRequest) -> bool:
+    return bool(request.config.getoption("--keep-docker"))
 _TEST_FAILURE_LOGS_DIR = _PROJECT_ROOT / "tests" / "logs"
 # Docker mounts ./controller/data:/app/data, so DB is at controller/data/controller.db
 # Local runs use controller/ControllerNode/data/controller.db
@@ -46,13 +61,16 @@ def _wipe_controller_db() -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _clean_controller_db_each_session():
+def _clean_controller_db_each_session(keep_docker: bool):
     """Wipe controller.db before and after every test session, regardless of
     which fixtures the session uses. Prevents stale device/routing rows from
     leaking between runs."""
     reap_streambed_runtime_containers()
     _wipe_controller_db()
     yield
+    if keep_docker:
+        print("\n[pytest --keep-docker] Skipping session-end reap and controller DB wipe.")
+        return
     reap_streambed_runtime_containers()
     _wipe_controller_db()
 
@@ -72,7 +90,10 @@ def mock_video_server():
 
 
 @pytest.fixture(scope="session")
-def deployed_inference_stack(mock_video_server):
+def deployed_inference_stack(
+    keep_docker: bool,
+    mock_video_server,
+):
     """
     Session-scoped fixture: brings up controller + daemons, deploys all inference
     containers, yields for tests, then deletes inference and tears down compose.
@@ -97,13 +118,16 @@ def deployed_inference_stack(mock_video_server):
 
     yield manager
 
+    if keep_docker:
+        print("\n[pytest --keep-docker] Skipping inference delete and compose down.")
+        return
     delete_all_inference(controller_url="http://localhost:8080")
     manager.down_services()
     reap_streambed_runtime_containers()
 
 
 @pytest.fixture(scope="module")
-def deployment_stack():
+def deployment_stack(keep_docker: bool):
     """
     Module-scoped fixture: brings up controller + daemons only (no auto-deploy).
     For tests that manually deploy/delete via the controller API.
@@ -131,6 +155,9 @@ def deployment_stack():
 
     yield manager
 
+    if keep_docker:
+        print("\n[pytest --keep-docker] Skipping device delete, compose down, and reap.")
+        return
     for device_id in _ALL_DEVICE_IDS:
         try:
             delete_device(device_id, controller_url="http://localhost:8080")

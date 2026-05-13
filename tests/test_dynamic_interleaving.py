@@ -33,7 +33,7 @@ THROTTLED_FRAME_THRESHOLD = 50
 
 
 @pytest.fixture(scope="module")
-def throttle_stack():
+def throttle_stack(keep_docker: bool):
     """Bring up controller, daemon-edge1, daemon-server1, throttle-proxy."""
     manager = DockerComposeManager(
         compose_files=["docker-compose.yml", "docker-compose.throttle.yml"],
@@ -54,6 +54,9 @@ def throttle_stack():
 
     yield manager
 
+    if keep_docker:
+        print("\n[pytest --keep-docker] Skipping throttle stack teardown.")
+        return
     for device_id in ("server-001", "edge-001"):
         try:
             delete_device(device_id, controller_url=CONTROLLER_URL)

@@ -3,7 +3,8 @@ import re
 import time
 
 import httpx
-from db import delete_deployment, get_device_address, get_last_deployment, record_deployment
+
+from .db import delete_deployment, get_device_address, get_last_deployment, record_deployment
 
 MAX_RETRIES = 3
 RETRY_DELAY_SEC = 2

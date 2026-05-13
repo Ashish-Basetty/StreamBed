@@ -15,7 +15,10 @@ import logging
 from datetime import datetime, timedelta
 
 import httpx
-from db import (
+
+from shared.interfaces.heartbeat_spec import HeartbeatStatus
+
+from .db import (
     get_cluster_deployments,
     get_cluster_status,
     get_connection,
@@ -25,10 +28,8 @@ from db import (
     get_last_deployment,
     set_device_status_evaluated,
 )
-from deploy import DeployError, delete_container_from_device, deploy_to_device
-from routing import assign_unrouted_edges, orphan_edges_for_server
-
-from shared.interfaces.heartbeat_spec import HeartbeatStatus
+from .deploy import DeployError, delete_container_from_device, deploy_to_device
+from .routing import assign_unrouted_edges, orphan_edges_for_server
 
 logger = logging.getLogger(__name__)
 

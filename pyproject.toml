@@ -64,6 +64,8 @@ ignore = [
 # `sys.path.insert(...)` before importing sibling modules so they can be
 # run as standalone scripts; that's the intent, not an oversight.
 "experiments/**/*.py" = ["E402"]
+# Ensures repo root is on sys.path before importing shared.
+"control-plane/ControllerNode/streambed_controller/db.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 # Treat the project's first-party packages as local so imports group cleanly.
@@ -72,4 +74,6 @@ known-first-party = [
     "control_plane",
     "advisorlib",
     "bench",
+    "streambed_router",
+    "streambed_controller",
 ]

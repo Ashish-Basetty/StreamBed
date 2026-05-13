@@ -1,13 +1,24 @@
 """SQLite database setup and access for the controller node."""
-import os
 import sqlite3
 import sys
 from pathlib import Path
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
+def _ensure_repo_root_on_path() -> None:
+    """Ensure repo root (or `/app` in Docker) is on sys.path for `import shared`."""
+    here = Path(__file__).resolve()
+    for anc in here.parents:
+        if (anc / "shared").is_dir():
+            p = str(anc)
+            if p not in sys.path:
+                sys.path.insert(0, p)
+            break
+
+
+_ensure_repo_root_on_path()
 from shared.interfaces.heartbeat_spec import HeartbeatStatus
 
-DB_PATH = Path(__file__).parent / "data" / "controller.db"
+DB_PATH = Path(__file__).resolve().parents[1] / "data" / "controller.db"
 
 
 def get_connection() -> sqlite3.Connection:
@@ -347,6 +358,22 @@ def get_cluster_deployments(device_cluster: str) -> dict[str, dict]:
             (device_cluster,),
         ).fetchall()
         return {row["device_id"]: dict(row) for row in rows}
+    finally:
+        conn.close()
+
+
+def delete_routing_involving_device(device_cluster: str, device_id: str) -> int:
+    """Remove routing rows where this device appears as source or target. Returns row count deleted."""
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            """DELETE FROM routing
+               WHERE source_cluster = ?
+                 AND (source_device = ? OR target_device = ?)""",
+            (device_cluster, device_id, device_id),
+        )
+        conn.commit()
+        return cur.rowcount
     finally:
         conn.close()
 

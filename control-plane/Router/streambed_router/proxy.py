@@ -4,7 +4,7 @@ import logging
 import httpx
 from fastapi import HTTPException, Request, Response
 
-from db import lookup_controller, list_unique_controllers
+from .db import list_unique_controllers, lookup_controller
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +42,10 @@ async def forward(
         )
     except httpx.TimeoutException as e:
         logger.warning(f"proxy timeout: cluster={cluster_name} url={url} ({e})")
-        raise HTTPException(504, f"Upstream timeout: {target_base}")
+        raise HTTPException(504, f"Upstream timeout: {target_base}") from e
     except httpx.HTTPError as e:
         logger.warning(f"proxy connect failed: cluster={cluster_name} url={url} ({e})")
-        raise HTTPException(502, f"Upstream unreachable: {target_base}")
+        raise HTTPException(502, f"Upstream unreachable: {target_base}") from e
 
     response_headers = {
         k: v for k, v in upstream.headers.items()

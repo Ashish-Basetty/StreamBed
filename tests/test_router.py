@@ -1,39 +1,40 @@
 """Router unit tests. Stubs controllers via httpx.MockTransport — no live network."""
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-# Make the router module importable directly.
-ROUTER_DIR = Path(__file__).resolve().parents[1] / "control-plane" / "Router"
-sys.path.insert(0, str(ROUTER_DIR))
+# Packages live under control-plane/Router (same layout as Docker /app).
+ROUTER_PKG_PARENT = Path(__file__).resolve().parents[1] / "control-plane" / "Router"
+sys.path.insert(0, str(ROUTER_PKG_PARENT))
 
 
 @pytest.fixture
 def router_app(monkeypatch, tmp_path):
     """Spin up the Router FastAPI app with a temp DB and a stubbed httpx transport.
-    Returns (app, db_module, set_transport(callable)) so tests can wire up controllers.
+    Returns (app, db_module, main_module) so tests can wire up controllers.
     """
     db_path = tmp_path / "router.db"
     monkeypatch.setenv("ROUTER_DB_PATH", str(db_path))
     monkeypatch.setenv("ROUTER_ADMIN_TOKEN", "test-token")
     monkeypatch.setenv("FRONTEND_DIR", "/nonexistent")  # skip static mount
 
-    # Reload modules picking up the env vars.
-    for mod in ("db", "proxy", "admin", "main"):
-        sys.modules.pop(mod, None)
+    # Reload package so env vars apply to DB_PATH and app construction.
+    for mod in list(sys.modules):
+        if mod == "streambed_router" or mod.startswith("streambed_router."):
+            sys.modules.pop(mod, None)
 
-    import db  # type: ignore
+    import streambed_router.db as db
+
     db.init_db()
 
-    import main  # type: ignore
-    app = main.app
+    import streambed_router.main as main_mod
 
-    return app, db, main
+    app = main_mod.app
+
+    return app, db, main_mod
 
 
 def _make_handler(routes):

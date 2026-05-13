@@ -116,7 +116,7 @@ def _wait_for_log(container_name: str, needle: str, *, timeout_s: float = 45.0) 
     raise AssertionError(f"{needle!r} not found in logs for {container_name}\n{last_logs}")
 
 
-def test_advisor_phase_d_docker_smoke_one_episode(tmp_path: Path) -> None:
+def test_advisor_phase_d_docker_smoke_one_episode(tmp_path: Path, keep_docker: bool) -> None:
     """Run one episode through controller-deployed advisor containers and sidecars."""
     if not _TEACHER.exists() or not _STUDENT.exists():
         pytest.skip("advisor checkpoints are not available")
@@ -196,13 +196,16 @@ def test_advisor_phase_d_docker_smoke_one_episode(tmp_path: Path) -> None:
         edge_sidecar_logs = _docker_logs(_EDGE_SIDECAR)
         server_sidecar_logs = _docker_logs(_SERVER_SIDECAR)
     finally:
-        for device_id in ("server-001", "edge-001"):
-            try:
-                delete_device(device_id, controller_url=_CONTROLLER_URL)
-            except Exception:
-                pass
-        manager.down_services()
-        reap_streambed_runtime_containers()
+        if keep_docker:
+            print("\n[pytest --keep-docker] Skipping device delete, compose down, and reap.")
+        else:
+            for device_id in ("server-001", "edge-001"):
+                try:
+                    delete_device(device_id, controller_url=_CONTROLLER_URL)
+                except Exception:
+                    pass
+            manager.down_services()
+            reap_streambed_runtime_containers()
 
     summary = json.loads(out.read_text())
     assert summary["episodes"] == 1

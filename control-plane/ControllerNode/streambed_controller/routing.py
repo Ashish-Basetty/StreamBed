@@ -5,7 +5,7 @@ to edge daemons) are the caller's responsibility.
 """
 import logging
 
-from db import get_connection
+from .db import get_connection
 
 logger = logging.getLogger(__name__)
 

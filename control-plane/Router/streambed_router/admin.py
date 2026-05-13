@@ -5,7 +5,7 @@ import secrets
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-import db
+from . import db
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 

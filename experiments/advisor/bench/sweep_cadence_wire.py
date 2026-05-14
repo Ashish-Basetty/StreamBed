@@ -31,8 +31,7 @@ import sys
 import time
 from pathlib import Path
 
-DEFAULT_ADVISOR_FEED_PORT = 9101
-DEFAULT_EDGE_ADVICE_PORT = 9102
+DEFAULT_UNIFIED_UDP_PORT = 9101
 DEFAULT_EDGE_TCP_PORT = 9100
 
 
@@ -115,13 +114,11 @@ def run_cadence(
         advisor_cmd = [
             py, "-u", "-m", "experiments.advisor.server.advisor_server",
             "--teacher", str(args.teacher),
-            "--feed-port", str(args.advisor_feed_port),
-            "--advice-host", "127.0.0.1",
-            "--advice-port", str(args.edge_advice_port),
+            "--bind-udp", f"0.0.0.0:{args.unified_udp_port}",
             "--reply-every-n", str(int(cadence)),
         ]
         advisor_p = _spawn(advisor_cmd, advisor_log)
-        if not _wait_for_log(advisor_log, "listening for features", 30.0):
+        if not _wait_for_log(advisor_log, "duplex listening on", 30.0):
             _kill(advisor_p)
             raise RuntimeError(f"advisor failed to start (see {advisor_log})")
 
@@ -140,8 +137,7 @@ def run_cadence(
     else:
         edge_cmd += [
             "--advisor-host", "127.0.0.1",
-            "--advisor-port", str(args.advisor_feed_port),
-            "--advice-listen-port", str(args.edge_advice_port),
+            "--advisor-port", str(args.unified_udp_port),
         ]
 
     edge_p = _spawn(edge_cmd, edge_log)
@@ -205,8 +201,8 @@ def main():
                    help="High default — we want the cadence itself to be "
                         "the limit, not the staleness gate.")
     p.add_argument("--edge-tcp-port", type=int, default=DEFAULT_EDGE_TCP_PORT)
-    p.add_argument("--advisor-feed-port", type=int, default=DEFAULT_ADVISOR_FEED_PORT)
-    p.add_argument("--edge-advice-port", type=int, default=DEFAULT_EDGE_ADVICE_PORT)
+    p.add_argument("--unified-udp-port", type=int, default=DEFAULT_UNIFIED_UDP_PORT,
+                   help="Single UDP port for direct bench (advisor --bind-udp, edge --advisor-port).")
     p.add_argument("--frame-gen-timeout-s", type=int, default=600)
     p.add_argument(
         "--artifact-dir",

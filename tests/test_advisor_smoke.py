@@ -56,6 +56,20 @@ def _remove_controller_db() -> None:
         Path(str(_CONTROLLER_DB) + suffix).unlink(missing_ok=True)
 
 
+def _remove_daemon_state() -> None:
+    """Wipe per-daemon persisted files. The host-mounted ./daemon-data/edgeN/
+    volume survives `compose down`, so a previous run's stream-target.json can
+    feed a stale target into the new edge sidecar's first poll before the test
+    issues its PUT — producing "no such host" lines on dial. Same idea as
+    _remove_controller_db, just for the daemon side."""
+    daemon_data = _REPO_ROOT / "daemon-data"
+    if not daemon_data.exists():
+        return
+    for pattern in ("*/stream-target.json", "*/deployed.json"):
+        for f in daemon_data.glob(pattern):
+            f.unlink(missing_ok=True)
+
+
 def _docker_output(args: list[str], *, timeout: int = 30) -> str:
     result = _run(["docker", *args], timeout=timeout)
     _assert_success(result, f"docker {' '.join(args)}")
@@ -73,8 +87,47 @@ def _container_name(prefix: str) -> str:
     return matches[0]
 
 
-def _docker_logs(container_name: str) -> str:
-    return _docker_output(["logs", container_name, "--tail", "240"])
+def _docker_logs(container_name: str, *, tail: int | None = 240) -> str:
+    """Fetch container logs. Default tail=240 keeps asserts cheap; use a large tail
+    when polling for a needle so success lines are not dropped off the tail.
+
+    Merge CLI stdout+stderr: some Docker Desktop builds send the log stream or
+    warnings on stderr; capture_output-only stdout looked 'empty' even when
+    the container was writing logs."""
+    args: list[str]
+    if tail is None:
+        args = ["logs", container_name]
+    else:
+        args = ["logs", container_name, "--tail", str(tail)]
+    result = _run(["docker", *args], timeout=30)
+    _assert_success(result, f"docker {' '.join(args)}")
+    return (result.stdout or "") + (result.stderr or "")
+
+
+def _docker_inspect_log_hints(container_name: str) -> str:
+    """Best-effort context when `docker logs` is empty (driver, tty, log path)."""
+    fmt = (
+        "status={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} "
+        "oom={{.State.OOMKilled}} restart={{.RestartCount}} "
+        "log_driver={{.HostConfig.LogConfig.Type}} log_path={{.LogPath}} tty={{.Config.Tty}}"
+    )
+    r = _run(
+        ["docker", "inspect", "--format", fmt, container_name],
+        timeout=30,
+    )
+    if r.returncode != 0:
+        return f"docker inspect failed (exit {r.returncode}): {r.stderr or r.stdout}".strip()
+    return (r.stdout or "").strip()
+
+
+def _assert_logs_non_empty(
+    container_name: str, logs: str, *, what: str = "check",
+) -> None:
+    """Fail fast if `docker logs` is empty — often wrong DOCKER_HOST / context vs compose."""
+    assert logs.strip(), (
+        f"empty docker logs for container {container_name!r} ({what}). "
+        "If compose is up elsewhere, align DOCKER_HOST / `docker context` with this test host."
+    )
 
 
 def _assert_sidecar_metrics(logs: str, *, role: str) -> None:
@@ -105,15 +158,46 @@ def _set_stream_target() -> None:
         resp.raise_for_status()
 
 
+def _print_docker_ps_before_log_wait() -> None:
+    """Show which containers this pytest process's `docker` CLI sees (debug context/network)."""
+    result = _run(["docker", "ps"], timeout=30)
+    blob = result.stdout
+    if result.stderr:
+        blob += result.stderr
+    if result.returncode != 0:
+        blob = f"docker ps failed (exit {result.returncode})\n{blob}"
+    print(
+        "\n[advisor_smoke] docker ps (before edge sidecar log wait):\n" + blob.rstrip() + "\n",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _wait_for_log(container_name: str, needle: str, *, timeout_s: float = 45.0) -> str:
     deadline = time.time() + timeout_s
     last_logs = ""
+    saw_nonempty = False
     while time.time() < deadline:
-        last_logs = _docker_logs(container_name)
+        # Full logs until connect — usually small; avoids missing an early line if tail is too small.
+        last_logs = _docker_logs(container_name, tail=None)
+        if last_logs.strip():
+            saw_nonempty = True
         if needle in last_logs:
+            _assert_logs_non_empty(container_name, last_logs, what="wait_for_log match")
             return last_logs
         time.sleep(1)
-    raise AssertionError(f"{needle!r} not found in logs for {container_name}\n{last_logs}")
+    detail = (
+        f"{needle!r} not found in logs for {container_name} after {timeout_s}s.\n"
+    )
+    if not saw_nonempty:
+        detail += (
+            "docker logs were always empty for this name — often a different Docker "
+            "context/network than the one running compose (check `docker context show` "
+            "and that this host sees the container in `docker ps`).\n"
+        )
+        detail += f"inspect: {_docker_inspect_log_hints(container_name)}\n"
+    detail += last_logs
+    raise AssertionError(detail)
 
 
 def test_advisor_phase_d_docker_smoke_one_episode(tmp_path: Path, keep_docker: bool) -> None:
@@ -131,6 +215,7 @@ def test_advisor_phase_d_docker_smoke_one_episode(tmp_path: Path, keep_docker: b
         reap_streambed_runtime_containers()
         manager.down_services()
         _remove_controller_db()
+        _remove_daemon_state()
 
         build = _run(
             [
@@ -195,6 +280,10 @@ def test_advisor_phase_d_docker_smoke_one_episode(tmp_path: Path, keep_docker: b
         server_logs = _docker_logs(server_container)
         edge_sidecar_logs = _docker_logs(_EDGE_SIDECAR)
         server_sidecar_logs = _docker_logs(_SERVER_SIDECAR)
+        _assert_logs_non_empty(edge_container, edge_logs, what="edge inference")
+        _assert_logs_non_empty(server_container, server_logs, what="server inference")
+        _assert_logs_non_empty(_EDGE_SIDECAR, edge_sidecar_logs, what="edge sidecar")
+        _assert_logs_non_empty(_SERVER_SIDECAR, server_sidecar_logs, what="server sidecar")
     finally:
         if keep_docker:
             print("\n[pytest --keep-docker] Skipping device delete, compose down, and reap.")

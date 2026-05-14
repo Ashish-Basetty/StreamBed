@@ -41,7 +41,9 @@ def _wait_for_controller(controller_url: str) -> None:
                 resp = client.get(f"{base}/health")
                 if resp.status_code == 200:
                     return
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+        except httpx.RequestError:
+            # Connect refused, timeouts, and ReadError (e.g. ECONNRESET while
+            # the container is still starting or recycling) — all retryable.
             pass
         time.sleep(WAIT_INTERVAL)
     raise RuntimeError(f"Controller at {controller_url} not ready after {WAIT_RETRIES} attempts")
@@ -59,7 +61,7 @@ def _wait_for_daemons(daemon_ports: list[int] | None = None) -> None:
                     resp = client.get(f"http://localhost:{port}/health")
                     if resp.status_code == 200:
                         ready += 1
-            except (httpx.ConnectError, httpx.ConnectTimeout):
+            except httpx.RequestError:
                 pass
         if ready == len(daemon_ports):
             return
@@ -83,7 +85,7 @@ def _wait_for_devices_registered(
                     registered = {d["device_id"] for d in resp.json().get("devices", [])}
                     if expected.issubset(registered):
                         return
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+        except httpx.RequestError:
             pass
         time.sleep(WAIT_INTERVAL)
     raise RuntimeError(

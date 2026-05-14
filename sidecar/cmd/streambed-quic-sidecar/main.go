@@ -21,11 +21,8 @@ func main() {
 	role := flag.String("role", env("SIDECAR_ROLE", "edge"), "edge|server")
 	daemonURL := flag.String("daemon-url", env("DAEMON_URL", ""), "edge role: base URL of co-located daemon (e.g. http://host:9090)")
 	peerQUICPort := flag.String("peer-quic-port", env("PEER_QUIC_PORT", "4433"), "edge role: QUIC port on the server sidecar")
-	localUDP := flag.String("local-udp", env("LOCAL_UDP_BIND", "0.0.0.0:9050"), "local UDP bind (edge role)")
-	localRecv := flag.String("local-recv", env("LOCAL_RECV_UDP_TARGET", ""), "edge role: optional UDP host:port; non-FBCK control msgs are forwarded here for the local app")
+	localUDP := flag.String("local-udp", env("LOCAL_UDP_BIND", "0.0.0.0:9050"), "single UDP bind for app↔sidecar (edge and server roles)")
 	bind := flag.String("bind", env("QUIC_BIND", "0.0.0.0:4433"), "QUIC bind (server role)")
-	localServer := flag.String("local-server", env("LOCAL_SERVER_UDP", "127.0.0.1:9000"), "server container UDP target (server role)")
-	serverRecvBind := flag.String("server-recv-bind", env("SERVER_REVERSE_UDP_BIND", ""), "server role: optional UDP listener for reverse-path data (e.g. advisor CSTR); empty disables")
 	metricsAddr := flag.String("metrics", env("METRICS_ADDR", ":9100"), "Prometheus metrics bind")
 	flag.Parse()
 
@@ -54,18 +51,16 @@ func main() {
 			log.Fatalf("invalid PEER_QUIC_PORT %q: %v", *peerQUICPort, perr)
 		}
 		err = edge.Run(ctx, edge.Config{
-			LocalUDPBind:       *localUDP,
-			LocalRecvUDPTarget: *localRecv,
-			DaemonURL:          *daemonURL,
-			PeerQUICPort:       peerPort,
-			Metrics:            reg,
+			LocalUDPBind: *localUDP,
+			DaemonURL:    *daemonURL,
+			PeerQUICPort: peerPort,
+			Metrics:      reg,
 		})
 	case "server":
 		err = server.Run(ctx, server.Config{
-			BindAddr:           *bind,
-			LocalServerUDPAddr: *localServer,
-			LocalUDPBindAddr:   *serverRecvBind,
-			Metrics:            reg,
+			BindAddr:     *bind,
+			LocalUDPBind: *localUDP,
+			Metrics:      reg,
 		})
 	default:
 		log.Fatalf("unknown role %q (want edge|server)", *role)

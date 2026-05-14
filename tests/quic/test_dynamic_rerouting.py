@@ -82,7 +82,7 @@ def test_reroute_on_target_change(sidecar_binary, tmp_path):
         role="server",
         env={
             "QUIC_BIND": f"127.0.0.1:{quic_a}",
-            "LOCAL_SERVER_UDP": f"127.0.0.1:{local_a}",
+            "LOCAL_UDP_BIND": f"127.0.0.1:{local_a}",
             "METRICS_ADDR": f"127.0.0.1:{metrics_a}",
         },
         log_path=tmp_path / "server_a.log",
@@ -99,7 +99,7 @@ def test_reroute_on_target_change(sidecar_binary, tmp_path):
         role="server",
         env={
             "QUIC_BIND": f"127.0.0.1:{quic_b}",
-            "LOCAL_SERVER_UDP": f"127.0.0.1:{local_b}",
+            "LOCAL_UDP_BIND": f"127.0.0.1:{local_b}",
             "METRICS_ADDR": f"127.0.0.1:{metrics_b}",
         },
         log_path=tmp_path / "server_b.log",
@@ -131,28 +131,30 @@ def test_reroute_on_target_change(sidecar_binary, tmp_path):
         # Give the edge time to poll, connect to server A, and complete handshake.
         time.sleep(1.5)
 
-        # Verify edge → server A path is live: packet sent to edge UDP arrives
-        # at server A's local UDP target.
-        local_a_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        local_a_sock.bind(("127.0.0.1", local_a))
-        local_a_sock.settimeout(2.0)
+        # Simulate server-side inference: one UDP socket per sidecar, bound to an
+        # ephemeral port so it does not collide with the sidecar's LOCAL_UDP_BIND.
+        infer_a = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        infer_a.bind(("127.0.0.1", 0))
+        infer_a.sendto(b"prime", ("127.0.0.1", local_a))
+        infer_a.settimeout(2.0)
 
+        # Verify edge → server A path is live: EMBD from edge arrives at the client.
         _send_udp(edge_udp, _EMBD_PAYLOAD)
         try:
-            data, _ = local_a_sock.recvfrom(65535)
+            data, _ = infer_a.recvfrom(65535)
             assert data == _EMBD_PAYLOAD, "server A did not receive initial frame"
         except TimeoutError:
             pytest.fail("server A did not receive frame before reroute")
         finally:
-            local_a_sock.close()
+            infer_a.close()
 
         # Reroute: update mock daemon to point to server B.
         mock.set_target(target_ip="127.0.0.1", quic_port=quic_b)
 
-        # Bind server B's local UDP now (before edge reconnects so no ICMP bounce).
-        local_b_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        local_b_sock.bind(("127.0.0.1", local_b))
-        local_b_sock.settimeout(0.5)
+        infer_b = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        infer_b.bind(("127.0.0.1", 0))
+        infer_b.sendto(b"prime", ("127.0.0.1", local_b))
+        infer_b.settimeout(0.5)
 
         # Pump frames continuously; after the sidecar reconnects (≤ 15 s poll +
         # ~1 s dial) they should start arriving at server B.
@@ -161,7 +163,7 @@ def test_reroute_on_target_change(sidecar_binary, tmp_path):
         while time.monotonic() < deadline:
             _send_udp(edge_udp, _EMBD_PAYLOAD)
             try:
-                data, _ = local_b_sock.recvfrom(65535)
+                data, _ = infer_b.recvfrom(65535)
                 if data == _EMBD_PAYLOAD:
                     got_b = True
                     break
@@ -169,7 +171,7 @@ def test_reroute_on_target_change(sidecar_binary, tmp_path):
                 pass
             time.sleep(0.1)
 
-        local_b_sock.close()
+        infer_b.close()
         assert got_b, "server B never received a frame after reroute (waited 20 s)"
 
     finally:

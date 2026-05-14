@@ -274,6 +274,167 @@ class StreamBedUDPSender(StreamSenderInterface):
             self._protocol = None
 
 
+class StreamBedUDPDuplex:
+    """One UDP socket: send chunks/custom frames and receive reassembled
+    StreamFrames and CSTM payloads. Two modes:
+      connect(host, port) — bidirectional, sends go to that peer.
+      listen(host, port)  — bind-only; sends go to the last source addr seen
+                            (mirrors the Go sidecar's lastApp/lastInfer pattern,
+                            so bench harnesses can reply without a known peer)."""
+
+    def __init__(
+        self,
+        chunk_delay: float = 0.0,
+        use_jpeg: bool = False,
+        on_bytes_received: Callable[[int], None] | None = None,
+        on_datagram_received: Callable[[bytes, tuple], None] | None = None,
+    ):
+        self._transport = None
+        self._protocol = None
+        self._peer_addr: tuple[str, int] | None = None
+        # Updated on every inbound datagram in listen()-mode so send/send_custom
+        # can reply without a configured peer. Latest-wins for multi-peer; same
+        # constraint as the unified-port sidecar (see SidecarUnifiedPortRefactor.md).
+        self._last_src_addr: tuple | None = None
+        self._chunk_delay = chunk_delay
+        self._use_jpeg = use_jpeg
+        self._queue: asyncio.Queue | None = None
+        self._custom_queue: asyncio.Queue | None = None
+        self._stopped = False
+        self._on_bytes_received = on_bytes_received
+        self._on_datagram_received = on_datagram_received
+
+    def _wrap_datagram_cb(self) -> Callable[[bytes, tuple], None]:
+        """Chain last-src tracking before any user-supplied callback."""
+        user_cb = self._on_datagram_received
+
+        def _cb(data: bytes, addr: tuple) -> None:
+            self._last_src_addr = addr
+            if user_cb is not None:
+                user_cb(data, addr)
+
+        return _cb
+
+    async def connect(self, host: str, port: int) -> None:
+        loop = asyncio.get_running_loop()
+        self._peer_addr = (host, port)
+        self._queue = asyncio.Queue()
+        self._custom_queue = asyncio.Queue()
+        self._transport, self._protocol = await loop.create_datagram_endpoint(
+            lambda: StreamBedUDPReceiver._RecvProtocol(
+                self._queue,
+                self._custom_queue,
+                self._on_bytes_received,
+                self._wrap_datagram_cb(),
+            ),
+            remote_addr=(host, port),
+        )
+        handshake = json.dumps({"type": "handshake", "source": "duplex"}).encode("utf-8")
+        self._transport.sendto(handshake)
+
+    async def listen(self, host: str, port: int) -> None:
+        """Bind for incoming UDP (e.g. local bench without a sidecar). Sends use
+        the last source addr seen — no peer needed in advance."""
+        loop = asyncio.get_running_loop()
+        self._queue = asyncio.Queue()
+        self._custom_queue = asyncio.Queue()
+        self._transport, self._protocol = await loop.create_datagram_endpoint(
+            lambda: StreamBedUDPReceiver._RecvProtocol(
+                self._queue,
+                self._custom_queue,
+                self._on_bytes_received,
+                self._wrap_datagram_cb(),
+            ),
+            local_addr=(host, port),
+        )
+
+    def _resolve_send_addr(self) -> tuple | None:
+        """connect() mode passes addr=None (transport is connected); listen()
+        mode returns _last_src_addr or None if nothing has been received yet."""
+        if self._peer_addr is not None:
+            return None
+        return self._last_src_addr
+
+    async def send(self, frame: StreamFrame) -> bool:
+        if not self._transport:
+            raise RuntimeError("duplex is not started")
+        addr = self._resolve_send_addr()
+        if self._peer_addr is None and addr is None:
+            raise RuntimeError("duplex listen-mode: no peer learned yet")
+        try:
+            for tag, sub in _split_for_wire(frame):
+                payload = serialize_stream_frame(sub, self._use_jpeg)
+                stream_id = os.urandom(16)
+                for chunk in _make_chunks(stream_id, payload, tag=tag):
+                    self._transport.sendto(chunk, addr)
+                    await asyncio.sleep(self._chunk_delay)
+            return True
+        except Exception as e:
+            print(f"[UDPDuplex] failed to send frame: {e}")
+            return False
+
+    async def send_custom(self, payload: bytes, reliable: bool = True) -> bool:
+        if not self._transport:
+            raise RuntimeError("duplex is not started")
+        addr = self._resolve_send_addr()
+        if self._peer_addr is None and addr is None:
+            raise RuntimeError("duplex listen-mode: no peer learned yet")
+        tag = CSTM_RELIABLE_MAGIC if reliable else CSTM_LOSSY_MAGIC
+        try:
+            stream_id = os.urandom(16)
+            for chunk in _make_chunks(stream_id, payload, tag=tag):
+                self._transport.sendto(chunk, addr)
+                await asyncio.sleep(self._chunk_delay)
+            return True
+        except Exception as e:
+            print(f"[UDPDuplex] failed to send custom payload: {e}")
+            return False
+
+    async def receive_stream(self) -> AsyncIterator[StreamFrame]:
+        if self._queue is None:
+            raise RuntimeError("duplex.connect must be called before receive_stream")
+        while not self._stopped:
+            frame = await self._queue.get()
+            yield frame
+
+    async def recv_one(self, timeout: float | None = None) -> StreamFrame | None:
+        if self._queue is None:
+            raise RuntimeError("duplex.connect must be called before recv_one")
+        try:
+            if timeout is None:
+                return await self._queue.get()
+            return await asyncio.wait_for(self._queue.get(), timeout)
+        except TimeoutError:
+            return None
+
+    async def recv_custom(
+        self, timeout: float | None = None
+    ) -> tuple[bytes, bytes] | None:
+        if self._custom_queue is None:
+            raise RuntimeError("duplex.connect must be called before recv_custom")
+        try:
+            if timeout is None:
+                return await self._custom_queue.get()
+            return await asyncio.wait_for(self._custom_queue.get(), timeout)
+        except TimeoutError:
+            return None
+
+    async def close(self) -> None:
+        self._stopped = True
+        if self._transport:
+            self._transport.close()
+            self._transport = None
+            self._protocol = None
+        if self._queue:
+            while not self._queue.empty():
+                _ = self._queue.get_nowait()
+            self._queue = None
+        if self._custom_queue:
+            while not self._custom_queue.empty():
+                _ = self._custom_queue.get_nowait()
+            self._custom_queue = None
+
+
 class StreamBedUDPReceiver(StreamReceiverInterface):
     def __init__(
         self,
@@ -450,6 +611,19 @@ class StreamBedUDPServerReceiver(StreamBedUDPReceiver):
     """
 
     def __init__(self):
+        self.stream_received: deque = deque(maxlen=5000)
+        self.stream_source_addr: tuple | None = None
+        super().__init__(on_datagram_received=self._on_datagram)
+
+    def _on_datagram(self, data: bytes, addr: tuple) -> None:
+        self.stream_received.append((time.monotonic(), len(data)))
+        self.stream_source_addr = addr
+
+
+class StreamBedUDPServerDuplex(StreamBedUDPDuplex):
+    """Duplex to the sidecar with datagram stats for server-side feedback/debug."""
+
+    def __init__(self) -> None:
         self.stream_received: deque = deque(maxlen=5000)
         self.stream_source_addr: tuple | None = None
         super().__init__(on_datagram_received=self._on_datagram)

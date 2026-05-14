@@ -18,7 +18,6 @@ import pytest
 
 from tests.quic.conftest import process_rss_kb, scrape_metric
 
-
 pytestmark = [pytest.mark.soak]
 
 
@@ -40,7 +39,7 @@ def _drain_loop(listener: socket.socket, stop: threading.Event) -> None:
     while not stop.is_set():
         try:
             listener.recvfrom(65535)
-        except socket.timeout:
+        except TimeoutError:
             continue
 
 
@@ -55,10 +54,12 @@ def test_sidecar_rss_stable(sidecar_pair_factory):
     edge = pair["edges"][0]
     ports = pair["ports"]
 
-    # Receiver at server's local UDP target.
+    # Receiver simulating server-side inference: ephemeral port, primed so the
+    # sidecar learns lastInfer before QUIC→UDP delivery.
     listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
-    listener.bind(("127.0.0.1", ports["server_local_udp"]))
+    listener.bind(("127.0.0.1", 0))
+    listener.sendto(b"prime", ("127.0.0.1", ports["server_udp"]))
     listener.settimeout(0.5)
 
     stop = threading.Event()

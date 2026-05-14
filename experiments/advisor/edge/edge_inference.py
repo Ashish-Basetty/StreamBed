@@ -6,9 +6,9 @@ Two concurrent input/output paths:
        - reads CHNK-tagged JSON frame messages from the host process
        - returns ACTN-tagged JSON action messages
 
-  2. Edge ⇄ advisor (UDP via existing StreamBedUDPSender/Receiver):
-       - per inferred frame, ships StreamFrame(frame, embedding=feature)
-         which `_split_for_wire` turns into CHNK + EMBD on the wire
+  2. Edge ⇄ advisor (UDP via StreamBedUDPDuplex):
+       - one connected datagram socket to the co-located sidecar (send frames,
+         receive CSTR advice on the same FD)
        - background task drains `recv_custom()` for CSTR advice messages,
          updates a latest-advice slot
        - predict path reads the slot non-blocking, blends advice into
@@ -16,15 +16,6 @@ Two concurrent input/output paths:
 
 If --advisor-host=none, the UDP path is skipped entirely and the edge
 plays solo (Phase B baseline mode).
-
-Usage:
-  python -m experiments.advisor.edge.edge_inference \\
-      --teacher checkpoints/teacher.zip \\
-      --student checkpoints/students/shared_h4.pt \\
-      --port 9100 \\
-      --advisor-host 127.0.0.1 --advisor-port 9101 \\
-      --advice-listen-port 9102 \\
-      --blend-mode replacement
 """
 from __future__ import annotations
 
@@ -49,8 +40,7 @@ from experiments.advisor.bench.train_shared_head import SmallHead
 # unchanged (no new code in StreamBed's protocol layer).
 from shared.heartbeat import heartbeat_loop
 from shared.interfaces.stream_interface import (
-    StreamBedUDPReceiver,
-    StreamBedUDPSender,
+    StreamBedUDPDuplex,
     StreamFrame,
 )
 from shared.tcp_framing import (
@@ -136,7 +126,13 @@ class EdgeInference:
         """
         chw = np.transpose(frame_hwc_uint8, (2, 0, 1)).astype(np.float32)
         x = torch.from_numpy(chw).unsqueeze(0)
-        feat = self.teacher.policy.extract_features(x)
+        raw_feat = self.teacher.policy.extract_features(x)
+        if isinstance(raw_feat, tuple):
+            feat = raw_feat[0]
+        else:
+            feat = raw_feat
+        if feat.dim() > 2:
+            feat = feat.reshape(feat.size(0), -1)
         student_logits_t = self.head(feat).squeeze(0)
         student_logits = student_logits_t.cpu().numpy()
 
@@ -169,7 +165,7 @@ class EdgeInference:
             final_logits = student_logits
 
         action = int(np.argmax(final_logits))
-        feature_np = feat.squeeze(0).cpu().numpy()
+        feature_np = feat.squeeze(0).detach().cpu().numpy()
         self.frames_processed += 1
         return action, feature_np, advice_used, advice_age_s
 
@@ -185,7 +181,7 @@ def decode_advice(payload: bytes) -> tuple[float, np.ndarray]:
 
 
 async def advice_consumer(
-    receiver: StreamBedUDPReceiver, inference: EdgeInference
+    duplex: StreamBedUDPDuplex, inference: EdgeInference
 ) -> None:
     """Background task: drain CSTR advice messages from the receiver and
     update the inference's latest-advice slot. Runs forever; cancelled
@@ -193,7 +189,7 @@ async def advice_consumer(
     log.info("advice_consumer started")
     while True:
         try:
-            result = await receiver.recv_custom(timeout=1.0)
+            result = await duplex.recv_custom(timeout=1.0)
         except asyncio.CancelledError:
             log.info("advice_consumer cancelled")
             return
@@ -236,9 +232,9 @@ def encode_action_msg(
 
 async def handle_connection(
     inference: EdgeInference,
-    sender: StreamBedUDPSender | None,
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
+    duplex: StreamBedUDPDuplex | None = None,
 ) -> None:
     peer = writer.get_extra_info("peername")
     log.info("connection from %s", peer)
@@ -267,20 +263,6 @@ async def handle_connection(
             action, feature, advice_used, advice_age_s = inference.predict(frame)
             inf_ms = (time.monotonic() - t0) * 1000.0
 
-            # Ship the StreamFrame upstream. _split_for_wire turns this
-            # into one CHNK (frame, lossy) + one EMBD (feature, reliable)
-            # message via the existing UDP sender. Fire-and-forget; we
-            # don't block the host on the wire.
-            if sender is not None:
-                sf = StreamFrame(
-                    timestamp=ts,
-                    frame=frame,
-                    embedding=feature,
-                    model_version=f"shared-h{inference.head_meta['hidden']}-v1",
-                    source_device_id=inference.source_device_id,
-                )
-                asyncio.create_task(sender.send(sf))
-
             if inference.frames_processed % 200 == 0:
                 log.info(
                     "frames_processed=%d last_inference_ms=%.2f "
@@ -289,10 +271,34 @@ async def handle_connection(
                     inference.advice_recv_count,
                 )
 
+            # Send ACTN to the host before UDP upstream work. Scheduling
+            # `duplex.send` first let the UDP coroutine run as soon as
+            # `write_message` yields on `drain()`, interleaving heavy
+            # serialization/chunking with the TCP reply and risking stalls or
+            # failures visible to the host as an empty read.
             await write_message(
                 writer, ACTN_MAGIC,
                 encode_action_msg(frame_idx, action, advice_used, advice_age_s),
             )
+
+            if duplex is not None:
+                sf = StreamFrame(
+                    timestamp=ts,
+                    frame=frame,
+                    embedding=feature,
+                    model_version=f"shared-h{inference.head_meta['hidden']}-v1",
+                    source_device_id=inference.source_device_id,
+                )
+
+                async def _udp_upstream(frame_to_send: StreamFrame = sf) -> None:
+                    try:
+                        await duplex.send(frame_to_send)
+                    except Exception:
+                        log.exception(
+                            "duplex.send failed after host ACTN (peer=%s)", peer
+                        )
+
+                asyncio.create_task(_udp_upstream())
     finally:
         writer.close()
         try:
@@ -325,8 +331,7 @@ def load_inference(args: argparse.Namespace) -> EdgeInference:
 
 
 async def serve(args: argparse.Namespace, inference: EdgeInference) -> None:
-    sender: StreamBedUDPSender | None = None
-    receiver: StreamBedUDPReceiver | None = None
+    duplex: StreamBedUDPDuplex | None = None
     advice_task: asyncio.Task | None = None
     heartbeat_task = asyncio.create_task(heartbeat_loop(model_version="advisor-edge"))
 
@@ -334,20 +339,18 @@ async def serve(args: argparse.Namespace, inference: EdgeInference) -> None:
     if advisor_disabled:
         log.info("advisor disabled (--advisor-host=none); running solo")
     else:
-        sender = StreamBedUDPSender()
-        await sender.connect(args.advisor_host, args.advisor_port)
-        log.info("StreamBedUDPSender → %s:%d (CHNK + EMBD)",
-                 args.advisor_host, args.advisor_port)
-
-        receiver = StreamBedUDPReceiver()
-        await receiver.listen(args.advice_listen_host, args.advice_listen_port)
-        log.info("StreamBedUDPReceiver listening %s:%d (CSTR advice)",
-                 args.advice_listen_host, args.advice_listen_port)
-        advice_task = asyncio.create_task(advice_consumer(receiver, inference))
+        duplex = StreamBedUDPDuplex()
+        await duplex.connect(args.advisor_host, args.advisor_port)
+        log.info(
+            "StreamBedUDPDuplex ↔ %s:%d (features out, CSTR advice in)",
+            args.advisor_host,
+            args.advisor_port,
+        )
+        advice_task = asyncio.create_task(advice_consumer(duplex, inference))
 
     try:
         server = await asyncio.start_server(
-            lambda r, w: handle_connection(inference, sender, r, w),
+            lambda r, w: handle_connection(inference, r, w, duplex),
             args.host, args.port,
         )
         bound = ", ".join(str(s.getsockname()) for s in server.sockets or [])
@@ -366,10 +369,8 @@ async def serve(args: argparse.Namespace, inference: EdgeInference) -> None:
             await heartbeat_task
         except (asyncio.CancelledError, Exception):
             pass
-        if sender is not None:
-            await sender.close()
-        if receiver is not None:
-            await receiver.stop()
+        if duplex is not None:
+            await duplex.close()
 
 
 def main():
@@ -392,10 +393,12 @@ def main():
     p.add_argument("--advisor-host",
                    default=os.environ.get("SIDECAR_HOST", "127.0.0.1"))
     p.add_argument("--advisor-port", type=int,
-                   default=int(os.environ.get("SIDECAR_FEED_PORT", "9101")))
-    p.add_argument("--advice-listen-host", default="0.0.0.0")
-    p.add_argument("--advice-listen-port", type=int,
-                   default=int(os.environ.get("ADVICE_LISTEN_PORT", "9102")))
+                   default=int(
+                       os.environ.get(
+                           "SIDECAR_UDP_PORT",
+                           os.environ.get("SIDECAR_FEED_PORT", "9050"),
+                       )
+                   ))
     # Blending policy.
     p.add_argument("--blend-mode",
                    choices=["off", "replacement", "additive", "decaying"],

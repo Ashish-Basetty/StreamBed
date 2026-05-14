@@ -8,6 +8,7 @@ daemon, named `streambed-{cluster}-{device_id}-sidecar`.
 import logging
 
 import docker
+from docker.types import LogConfig
 
 from shared.docker_labels import ROLE_SIDECAR, managed_labels
 from shared.utils import _get_docker, _get_network
@@ -28,18 +29,13 @@ def spawn_sidecar(
     daemon_url: str,
     peer_quic_port: int,
     local_udp_bind: str,
-    quic_bind: str,
-    local_server_udp: str,
-    local_recv_udp_target: str = "",
-    server_reverse_udp_bind: str = "",
+    quic_bind: str
 ) -> str | None:
     """Launch the sidecar container. Idempotent: removes any existing one first.
 
     Returns the new container name or None on failure.
 
     Edge role: polls daemon_url/stream-target every 15 s for the current peer.
-    `local_recv_udp_target` (edge) and `server_reverse_udp_bind` (server) are
-    optional reverse-path wiring; empty disables that half.
     """
     name = _container_name(cluster, device_id)
     try:
@@ -61,21 +57,19 @@ def spawn_sidecar(
         "SIDECAR_ROLE": role,
         "LOCAL_UDP_BIND": local_udp_bind,
         "QUIC_BIND": quic_bind,
-        "LOCAL_SERVER_UDP": local_server_udp,
         "DEVICE_ID": device_id,
         "DEVICE_CLUSTER": cluster,
         "DAEMON_URL": daemon_url,
         "PEER_QUIC_PORT": str(peer_quic_port),
     }
-    if local_recv_udp_target:
-        env["LOCAL_RECV_UDP_TARGET"] = local_recv_udp_target
-    if server_reverse_udp_bind:
-        env["SERVER_REVERSE_UDP_BIND"] = server_reverse_udp_bind
 
     run_kwargs: dict = {
         "name": name,
         "detach": True,
         "environment": env,
+        # Explicit json-file so `docker logs` always reads from the default file driver
+        # (avoids empty-log edge cases on some Docker Desktop setups).
+        "log_config": LogConfig(type="json-file"),
         # METADATA ONLY. The controller deployments table owns deployment
         # state; labels are just a recovery handle for orphaned Docker resources.
         "labels": managed_labels(cluster=cluster, device_id=device_id, role=ROLE_SIDECAR),
@@ -90,7 +84,7 @@ def spawn_sidecar(
 
     try:
         client.containers.run(image, **run_kwargs)
-        logger.info(f"[Daemon] sidecar spawned: {name} role={role} daemon={daemon_url}")
+        logger.info(f"[Daemon] sidecar spawned: {name} role={role} daemon={daemon_url} network={network}")
         return name
     except docker.errors.ImageNotFound:
         logger.error(f"[Daemon] sidecar: image not found: {image}")

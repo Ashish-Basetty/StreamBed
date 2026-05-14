@@ -17,7 +17,6 @@ import time
 
 import pytest
 
-
 pytestmark = [pytest.mark.integration_quic]
 
 
@@ -37,10 +36,11 @@ def _make_chnk(stream_id: bytes, payload: bytes) -> bytes:
     return b"CHNK" + stream_id + hdr + payload
 
 
-def _bind_udp_listener(port: int) -> socket.socket:
+def _bind_infer_client(server_udp_port: int) -> socket.socket:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
-    s.bind(("127.0.0.1", port))
+    s.bind(("127.0.0.1", 0))
+    s.sendto(b"prime", ("127.0.0.1", server_udp_port))
     s.settimeout(0.5)
     return s
 
@@ -59,9 +59,8 @@ def test_three_edges_one_server_fair_share(sidecar_pair_factory):
     pair = sidecar_pair_factory(edge_count=EDGE_COUNT)
     ports = pair["ports"]
 
-    # Bind the local-server-UDP listener before any edge sends traffic. The
-    # server sidecar will write into this port; we count by stream_id.
-    listener = _bind_udp_listener(ports["server_local_udp"])
+    # Client UDP socket for “inference”: prime lastInfer, then receive QUIC→UDP.
+    listener = _bind_infer_client(ports["server_udp"])
 
     stream_ids = [bytes([i + 1]) * 16 for i in range(EDGE_COUNT)]
     counts = {sid: 0 for sid in stream_ids}
@@ -72,7 +71,7 @@ def test_three_edges_one_server_fair_share(sidecar_pair_factory):
         while not stop.is_set():
             try:
                 data, _ = listener.recvfrom(65535)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             if len(data) >= 20 and data[:4] == b"CHNK":
                 sid = data[4:20]

@@ -5,11 +5,8 @@
 #                  -f experiments/advisor/docker-compose.advisor.yml up -d
 #
 # What this overlay does:
-#  1. Flips daemon-edge1 / daemon-server1 to STREAM_TRANSPORT=quic and turns
-#     on the new bidirectional sidecar wiring (SIDECAR_RECV_PORT for edge,
-#     SIDECAR_SERVER_REVERSE_BIND_PORT for server). The daemons will spawn
-#     QUIC sidecars with the reverse-path UDP listener / forward target wired
-#     to the local inference container (resolved by docker network alias).
+#  1. Flips daemon-edge1 / daemon-server1 to STREAM_TRANSPORT=quic so the
+#     daemons spawn QUIC sidecars (single UDP port per side for app↔sidecar).
 #  2. Exposes daemon-edge1's inference container TCP port (9100) on the host
 #     so frame_gen.py running on the host can reach the advisor edge.
 #  3. Declares two `build`-only services so `docker compose build advisor-edge
@@ -37,7 +34,6 @@ services:
   daemon-edge1:
     environment:
       - STREAM_TRANSPORT=quic
-      - SIDECAR_RECV_PORT=9102
     # NOTE: do NOT publish 9100 here. The inference container is launched by
     # /deploy with its own port binding (host_port=9100, container_port=9100);
     # publishing on the daemon would collide on host:9100.
@@ -45,7 +41,6 @@ services:
   daemon-server1:
     environment:
       - STREAM_TRANSPORT=quic
-      - SIDECAR_SERVER_REVERSE_BIND_PORT=9051
 
   # Build-only service for the advisor edge inference image. Not started by
   # `up`; runs only when explicitly invoked (e.g. `docker compose build

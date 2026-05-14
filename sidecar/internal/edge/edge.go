@@ -4,10 +4,10 @@
 //
 // Read local UDP, classify by 4-byte magic, push CHNK as datagrams and
 // RATE/ACTN over the control stream. The reverse direction carries server
-// FBCK observations into the bandwidth.RemoteBackend, plus (when
-// LocalRecvUDPTarget is set) any non-FBCK control payloads — e.g. CSTR
-// advice from a server-side advisor — forwarded back out to a local UDP
-// destination. Rate enforcement is fully sidecar-internal.
+// FBCK observations into the bandwidth.RemoteBackend, plus any non-FBCK
+// control payloads — e.g. CSTR advice from a server-side advisor — forwarded
+// back out on the same UDP socket to the last source address from the local
+// app. Rate enforcement is fully sidecar-internal.
 package edge
 
 import (
@@ -18,6 +18,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/streambed/sidecar/internal/bandwidth"
@@ -34,13 +35,8 @@ type Config struct {
 	// current peer address via GET /stream-target.
 	DaemonURL    string
 	PeerQUICPort int // QUIC port on the server sidecar; peer = target_ip:PeerQUICPort
-	// LocalRecvUDPTarget is an optional "host:port" the edge sidecar will
-	// forward non-FBCK control messages to (e.g. CSTR advice originating from
-	// a server-side advisor). Empty disables the reverse-data path; FBCK keeps
-	// flowing into the bandwidth estimator either way.
-	LocalRecvUDPTarget string
-	TLS                any // reserved; unused today
-	Metrics            *metrics.Registry
+	TLS          any // reserved; unused today
+	Metrics      *metrics.Registry
 	// Policy gates outbound payloads. If nil, Run constructs a
 	// RateLimit policy backed by a Composite(SentRate, RemoteRate) estimator.
 	Policy policy.Policy
@@ -111,9 +107,10 @@ func Run(ctx context.Context, cfg Config) error {
 		log.Printf("edge: QUIC connected to %s", peerAddr)
 
 		connCtx, connCancel := context.WithCancel(ctx)
+		var lastAppAddr atomic.Pointer[net.UDPAddr]
 		errc := make(chan error, 2)
-		go func() { errc <- pumpUDPToQUIC(connCtx, udp, conn, cfg) }()
-		go func() { errc <- pumpControlIntoBandwidth(connCtx, conn, remoteRate, cfg.LocalRecvUDPTarget) }()
+		go func() { errc <- pumpUDPToQUIC(connCtx, udp, conn, cfg, &lastAppAddr) }()
+		go func() { errc <- pumpControlIntoBandwidth(connCtx, conn, remoteRate, udp, &lastAppAddr) }()
 
 		var newPeer string
 		select {
@@ -213,7 +210,7 @@ func fetchTarget(ctx context.Context, url string, client *http.Client) (ip strin
 	return result.TargetIP, result.QUICPort
 }
 
-func pumpUDPToQUIC(ctx context.Context, udp *net.UDPConn, conn *quictransport.Conn, cfg Config) error {
+func pumpUDPToQUIC(ctx context.Context, udp *net.UDPConn, conn *quictransport.Conn, cfg Config, lastApp *atomic.Pointer[net.UDPAddr]) error {
 	buf := make([]byte, 65535)
 	for {
 		select {
@@ -221,9 +218,13 @@ func pumpUDPToQUIC(ctx context.Context, udp *net.UDPConn, conn *quictransport.Co
 			return ctx.Err()
 		default:
 		}
-		n, _, err := udp.ReadFromUDP(buf)
+		n, addr, err := udp.ReadFromUDP(buf)
 		if err != nil {
 			return err
+		}
+		if addr != nil {
+			a := *addr
+			lastApp.Store(&a)
 		}
 		payload := cfg.Policy.OnEgress(buf[:n])
 		if payload == nil {
@@ -249,18 +250,16 @@ func pumpUDPToQUIC(ctx context.Context, udp *net.UDPConn, conn *quictransport.Co
 }
 
 // pumpControlIntoBandwidth reads control frames from the peer and dispatches
-// by magic. FBCK frames update the RemoteBackend. Non-FBCK frames are
-// forwarded to recvTarget (resolved lazily on first use) as raw UDP — this is
-// how server-side CSTR (e.g. advisor advice) reaches the local app. Lazy
-// resolution avoids startup failures when the inference container's DNS alias
-// isn't registered yet.
+// by magic. FBCK frames update the RemoteBackend. Non-FBCK frames are written
+// back on the same local UDP socket used for ingress, to the last source
+// address seen from the local inference app (unified port).
 func pumpControlIntoBandwidth(
 	ctx context.Context,
 	conn *quictransport.Conn,
 	remote *bandwidth.RemoteBackend,
-	recvTarget string,
+	udp *net.UDPConn,
+	lastApp *atomic.Pointer[net.UDPAddr],
 ) error {
-	var recvOut *net.UDPConn
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -283,26 +282,12 @@ func pumpControlIntoBandwidth(
 			bps := binary.BigEndian.Uint64(msg[4:12])
 			remote.Update(bps)
 		default:
-			// CSTR / RATE / ACTN bound for the local app. Resolve and dial on
-			// first use so the sidecar can start before the inference container
-			// is registered in Docker DNS.
-			if recvTarget == "" {
+			// CSTR / RATE / ACTN to local app: reply to last inbound UDP source.
+			dst := lastApp.Load()
+			if dst == nil {
 				continue
 			}
-			if recvOut == nil {
-				raddr, rerr := net.ResolveUDPAddr("udp", recvTarget)
-				if rerr != nil {
-					log.Printf("edge: reverse-path resolve %s: %v (dropping)", recvTarget, rerr)
-					continue
-				}
-				recvOut, rerr = net.DialUDP("udp", nil, raddr)
-				if rerr != nil {
-					log.Printf("edge: reverse-path dial %s: %v (dropping)", recvTarget, rerr)
-					continue
-				}
-				log.Printf("edge: reverse-path UDP -> %s", raddr)
-			}
-			if _, werr := recvOut.Write(msg); werr != nil {
+			if _, werr := udp.WriteToUDP(msg, dst); werr != nil {
 				log.Printf("edge: reverse-path UDP write: %v", werr)
 			}
 		}

@@ -1,15 +1,12 @@
-"""Server -> edge reverse-path round trip.
+"""Server -> edge reverse-path round trip (unified UDP port).
 
-Phase D wiring: when SERVER_REVERSE_UDP_BIND is set on the server sidecar and
-LOCAL_RECV_UDP_TARGET is set on the edge sidecar, app data sent into the
-server's reverse-path UDP listener should arrive verbatim at the edge's
-forward target. The wire transport is the QUIC control stream (same one
-pumpFeedback uses), so non-FBCK control msgs ride alongside FBCK without
-new framing.
+Server-side inference sends into the sidecar's single `LOCAL_UDP_BIND`; those
+UDP packets are forwarded on the QUIC control stream. The edge sidecar
+delivers non-FBCK control to the last UDP source address it saw from the local
+app, so tests prime the edge by sending one datagram before injecting server
+advice traffic.
 
-This is the load-bearing test for advisor CSTR (server -> edge advice). The
-codec layer (CSTM_RELIABLE chunking + reassembly) is tested separately;
-here we just verify a single chunk-sized payload survives round trip.
+This is the load-bearing test for advisor CSTR (server -> edge advice).
 """
 from __future__ import annotations
 
@@ -36,11 +33,10 @@ def _drain_one(sock: socket.socket, timeout: float = 2.0) -> bytes:
 
 
 def test_cstr_roundtrips_server_to_edge(sidecar_pair_factory):
-    """A CSTR-tagged payload sent into the server's reverse-path UDP arrives
-    byte-for-byte at the edge's local recv target."""
+    """A CSTR-tagged payload sent into the server's unified UDP port arrives
+    byte-for-byte at the edge's local recv socket (after priming)."""
     pair = sidecar_pair_factory(edge_count=1, enable_reverse=True)
-    server_recv_port = pair["ports"]["server_reverse_udp"]
-    assert server_recv_port is not None
+    server_udp = pair["ports"]["server_udp"]
     edge_sock = pair["edge_recv_socks"][0]
 
     # Give the QUIC handshake a moment so the server has an active peer.
@@ -49,7 +45,7 @@ def test_cstr_roundtrips_server_to_edge(sidecar_pair_factory):
     # Smallest possible "CSTR" frame: 4-byte tag + 76-byte advice payload
     # (8 B timestamp + 17 × float32). Mirrors advisor_server.encode_advice.
     payload = b"CSTR" + (b"\x00" * 76)
-    _send_udp(server_recv_port, payload)
+    _send_udp(server_udp, payload)
 
     got = _drain_one(edge_sock)
     assert got == payload
@@ -59,21 +55,19 @@ def test_unrelated_tag_roundtrips_too(sidecar_pair_factory):
     """The reverse path is tag-agnostic for non-FBCK msgs — anything not FBCK
     is forwarded. Verifies we didn't accidentally hard-code CSTR."""
     pair = sidecar_pair_factory(edge_count=1, enable_reverse=True)
-    server_recv_port = pair["ports"]["server_reverse_udp"]
+    server_udp = pair["ports"]["server_udp"]
     edge_sock = pair["edge_recv_socks"][0]
 
     time.sleep(0.5)
 
     payload = b"ACTN" + b"hello-action"
-    _send_udp(server_recv_port, payload)
+    _send_udp(server_udp, payload)
     got = _drain_one(edge_sock)
     assert got == payload
 
 
 def test_reverse_path_disabled_by_default(sidecar_pair_factory):
-    """Without enable_reverse, no listener is opened on either side and the
-    fixture exposes no reverse port. Sanity check that the new flags are
-    truly opt-in."""
+    """Without enable_reverse, tests skip the edge priming socket."""
     pair = sidecar_pair_factory(edge_count=1, enable_reverse=False)
-    assert pair["ports"]["server_reverse_udp"] is None
+    assert pair["ports"]["server_udp"] is not None
     assert pair["edge_recv_socks"] == [None]

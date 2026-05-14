@@ -32,16 +32,20 @@ import torch
 from stable_baselines3 import PPO
 
 from shared.heartbeat import heartbeat_loop
-from shared.interfaces.stream_interface import (
-    StreamBedUDPSender,
-    StreamBedUDPServerReceiver,
-)
+from shared.interfaces.stream_interface import StreamBedUDPServerDuplex
 
 log = logging.getLogger("advisor_server")
 
 ADVICE_HEADER_SIZE = 8           # double timestamp
 ADVICE_LOGITS_BYTES = 17 * 4     # float32 logits
 ADVICE_PAYLOAD_SIZE = ADVICE_HEADER_SIZE + ADVICE_LOGITS_BYTES  # 76
+
+
+def _parse_bind_udp(spec: str) -> tuple[str, int]:
+    if spec.count(":") != 1:
+        raise ValueError(f"want HOST:PORT, got {spec!r}")
+    host, port_s = spec.split(":", 1)
+    return host, int(port_s)
 
 
 class Advisor:
@@ -72,14 +76,24 @@ def encode_advice(timestamp: float, logits: np.ndarray) -> bytes:
 
 async def serve(args: argparse.Namespace, advisor: Advisor) -> None:
     heartbeat_task = asyncio.create_task(heartbeat_loop(model_version="advisor-server"))
-    receiver = StreamBedUDPServerReceiver()
-    await receiver.listen(args.feed_host, args.feed_port)
-    log.info("listening for features on %s:%d", args.feed_host, args.feed_port)
-
-    sender = StreamBedUDPSender()
-    await sender.connect(args.advice_host, args.advice_port)
-    log.info("advice will go to %s:%d (reply_every_n=%d)",
-             args.advice_host, args.advice_port, args.reply_every_n)
+    duplex = StreamBedUDPServerDuplex()
+    if args.bind_udp:
+        host, port = _parse_bind_udp(args.bind_udp)
+        await duplex.listen(host, port)
+        log.info(
+            "duplex listening on %s:%d (direct bench); reply_every_n=%d",
+            host,
+            port,
+            args.reply_every_n,
+        )
+    else:
+        await duplex.connect(args.sidecar_host, args.sidecar_udp_port)
+        log.info(
+            "duplex to sidecar %s:%d (features in, advice out); reply_every_n=%d",
+            args.sidecar_host,
+            args.sidecar_udp_port,
+            args.reply_every_n,
+        )
 
     last_log_ts = time.monotonic()
     embd_count = 0   # rolling, for log line
@@ -87,7 +101,7 @@ async def serve(args: argparse.Namespace, advisor: Advisor) -> None:
     embd_seen_total = 0  # global, for cadence gating
 
     try:
-        async for sf in receiver.receive_stream():
+        async for sf in duplex.receive_stream():
             if sf.embedding is not None:
                 embd_count += 1
                 embd_seen_total += 1
@@ -105,7 +119,7 @@ async def serve(args: argparse.Namespace, advisor: Advisor) -> None:
                     feat = np.asarray(sf.embedding, dtype=np.float32).flatten()
                     advice = advisor.advise(feat)
                     payload = encode_advice(sf.timestamp, advice)
-                    asyncio.create_task(sender.send_custom(payload, reliable=True))
+                    asyncio.create_task(duplex.send_custom(payload, reliable=True))
             elif sf.frame is not None:
                 chnk_count += 1
                 # No-op for now. Phase F or beyond plugs this into FrameStore.
@@ -124,8 +138,7 @@ async def serve(args: argparse.Namespace, advisor: Advisor) -> None:
             await heartbeat_task
         except (asyncio.CancelledError, Exception):
             pass
-        await sender.close()
-        await receiver.stop()
+        await duplex.close()
 
 
 def main():
@@ -135,18 +148,24 @@ def main():
     p.add_argument("--teacher", type=Path,
                    default=Path(os.environ.get("TEACHER_PATH", "")) or None,
                    required="TEACHER_PATH" not in os.environ)
-    p.add_argument("--feed-host", default="0.0.0.0",
-                   help="UDP host to listen on for incoming StreamFrames.")
-    p.add_argument("--feed-port", type=int,
-                   default=int(os.environ.get("FEED_LISTEN_PORT", "9101")),
-                   help="UDP port to listen on for incoming StreamFrames.")
-    p.add_argument("--advice-host",
-                   default=os.environ.get("SIDECAR_HOST", "127.0.0.1"),
-                   help="UDP host to send advice to (edge inference's "
-                        "advice receiver, or the local sidecar in Phase D).")
-    p.add_argument("--advice-port", type=int,
-                   default=int(os.environ.get("SIDECAR_REVERSE_PORT", "9102")),
-                   help="UDP port to send advice to.")
+    p.add_argument(
+        "--bind-udp",
+        default=None,
+        metavar="HOST:PORT",
+        help="Listen on this UDP socket (local cadence sweep without sidecar). "
+             "If unset, connect to --sidecar-host:--sidecar-udp-port (deployment).",
+    )
+    p.add_argument(
+        "--sidecar-host",
+        default=os.environ.get("SIDECAR_HOST", "127.0.0.1"),
+        help="Host of the co-located QUIC sidecar when not using --bind-udp.",
+    )
+    p.add_argument(
+        "--sidecar-udp-port",
+        type=int,
+        default=int(os.environ.get("SIDECAR_UDP_PORT", "9050")),
+        help="UDP port on the sidecar (same for ingress and egress).",
+    )
     p.add_argument("--reply-every-n", type=int,
                    default=int(os.environ.get("REPLY_EVERY_N", "1")),
                    help="Reply with advice on every Nth EMBD received. "

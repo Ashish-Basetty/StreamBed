@@ -16,14 +16,11 @@ from daemon_config import (
     DEVICE_CLUSTER,
     DEVICE_ID,
     DEVICE_TYPE,
-    INGEST_UDP_PORT,
     REGISTER_RETRIES,
     REGISTER_RETRY_DELAY,
     SIDECAR_IMAGE,
     SIDECAR_LOCAL_UDP_PORT,
     SIDECAR_QUIC_BIND_PORT,
-    SIDECAR_RECV_PORT,
-    SIDECAR_SERVER_REVERSE_BIND_PORT,
     STATE_PATH,
     STREAM_TARGET_PATH,
     STREAMBED_CONFIG_HOST_PATH,
@@ -171,25 +168,8 @@ def _wait_running(client, name: str, timeout: int = 30) -> None:
 
 
 def _spawn_sidecar_for_role() -> str | None:
-    """Spawn the QUIC sidecar matching this daemon's role.
-
-    Reverse-path wiring is opt-in:
-      - Edge sidecar gets LOCAL_RECV_UDP_TARGET=<DEVICE_ID>:SIDECAR_RECV_PORT
-        when SIDECAR_RECV_PORT > 0. The local inference container must be on
-        the same docker network and have an alias = DEVICE_ID for that name
-        to resolve. /deploy attaches the alias for both server and edge.
-      - Server sidecar gets SERVER_REVERSE_UDP_BIND=0.0.0.0:SIDECAR_SERVER_REVERSE_BIND_PORT
-        when SIDECAR_SERVER_REVERSE_BIND_PORT > 0.
-    """
+    """Spawn the QUIC sidecar matching this daemon's role."""
     role = "edge" if DEVICE_TYPE == "edge" else "server"
-    local_recv_udp_target = ""
-    server_reverse_udp_bind = ""
-    if role == "edge" and SIDECAR_RECV_PORT > 0:
-        local_recv_udp_target = f"{DEVICE_ID}:{SIDECAR_RECV_PORT}"
-    if role == "server" and SIDECAR_SERVER_REVERSE_BIND_PORT > 0:
-        server_reverse_udp_bind = f"0.0.0.0:{SIDECAR_SERVER_REVERSE_BIND_PORT}"
-    # Server sidecar delivers frames to the local inference container by network alias.
-    local_server_udp = f"{DEVICE_ID}:{INGEST_UDP_PORT}" if role == "server" else ""
     return spawn_sidecar(
         cluster=DEVICE_CLUSTER,
         device_id=DEVICE_ID,
@@ -198,10 +178,7 @@ def _spawn_sidecar_for_role() -> str | None:
         daemon_url=f"http://{DAEMON_ADDRESS}:{DAEMON_PORT}",
         peer_quic_port=SIDECAR_QUIC_BIND_PORT,
         local_udp_bind=f"0.0.0.0:{SIDECAR_LOCAL_UDP_PORT}",
-        quic_bind=f"0.0.0.0:{SIDECAR_QUIC_BIND_PORT}",
-        local_server_udp=local_server_udp,
-        local_recv_udp_target=local_recv_udp_target,
-        server_reverse_udp_bind=server_reverse_udp_bind,
+        quic_bind=f"0.0.0.0:{SIDECAR_QUIC_BIND_PORT}"
     )
 
 
@@ -317,19 +294,17 @@ def deploy(body: DeployRequest) -> dict:
         }
         sidecar_name = f"streambed-{DEVICE_CLUSTER}-{DEVICE_ID}-sidecar"
         container_env["SIDECAR_HOST"] = sidecar_name
+        container_env["SIDECAR_UDP_PORT"] = str(SIDECAR_LOCAL_UDP_PORT)
         if DEVICE_TYPE == "edge":
             container_env["SIDECAR_FEED_PORT"] = str(SIDECAR_LOCAL_UDP_PORT)
-            if SIDECAR_RECV_PORT > 0:
-                container_env["ADVICE_LISTEN_PORT"] = str(SIDECAR_RECV_PORT)
-        else:
-            container_env["FEED_LISTEN_PORT"] = str(INGEST_UDP_PORT)
-            if SIDECAR_SERVER_REVERSE_BIND_PORT > 0:
-                container_env["SIDECAR_REVERSE_PORT"] = str(SIDECAR_SERVER_REVERSE_BIND_PORT)
         run_kwargs["environment"] = container_env
 
         container = client.containers.create(body.image, **run_kwargs)
         if network:
-            client.networks.get(network).connect(container, aliases=[DEVICE_ID])
+            connect_kw: dict = {}
+            if DEVICE_TYPE == "server":
+                connect_kw["aliases"] = [DEVICE_ID]
+            client.networks.get(network).connect(container, **connect_kw)
         container.start()
         _save_state(deploy_hash, body.image)
 

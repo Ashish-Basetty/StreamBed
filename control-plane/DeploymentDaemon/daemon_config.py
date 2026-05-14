@@ -46,17 +46,6 @@ SIDECAR_IMAGE = os.environ.get("SIDECAR_IMAGE", "ashishbasetty/streambed-quic-si
 SIDECAR_LOCAL_UDP_PORT = int(os.environ.get("SIDECAR_LOCAL_UDP_PORT", "9050"))
 SIDECAR_QUIC_BIND_PORT = int(os.environ.get("SIDECAR_QUIC_BIND_PORT", "4433"))
 
-# Reverse-path wiring (edge ↔ server, server originates, edge consumes).
-# Edge sidecar forwards non-FBCK control msgs to <DEVICE_ID>:SIDECAR_RECV_PORT,
-# which is where the local inference container's CSTR listener binds.
-# Server sidecar opens a UDP listener on SIDECAR_SERVER_REVERSE_BIND_PORT for
-# outbound application data (e.g. advisor advice) to be pumped onto the QUIC
-# control stream. Empty / unset on either side disables the corresponding
-# half — required for backward compat with the original (forward-only) flow.
-SIDECAR_RECV_PORT = int(os.environ.get("SIDECAR_RECV_PORT", "0"))
-SIDECAR_SERVER_REVERSE_BIND_PORT = int(os.environ.get("SIDECAR_SERVER_REVERSE_BIND_PORT", "0"))
-
-
 # Device Registration retry configuration
 REGISTER_RETRIES = 5
 REGISTER_RETRY_DELAY = 2.0

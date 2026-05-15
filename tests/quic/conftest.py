@@ -143,21 +143,21 @@ def scrape_metric(metrics_url: str, name: str) -> float:
 class MockDaemonServer:
     """Minimal HTTP server that serves GET /stream-target for a sidecar under test.
 
-    target_ip / quic_port can be updated at runtime to simulate rerouting.
-    quic_port=0 omits the field so the sidecar falls back to PEER_QUIC_PORT.
+    target_ip / target_port can be updated at runtime to simulate rerouting.
+    target_port=0 omits the field so the sidecar falls back to PEER_QUIC_PORT.
     """
 
-    def __init__(self, target_ip: str, quic_port: int = 0):
+    def __init__(self, target_ip: str, target_port: int = 0):
         self._target_ip = target_ip
-        self._quic_port = quic_port
+        self._target_port = target_port
         self._lock = threading.Lock()
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
 
-    def set_target(self, target_ip: str, quic_port: int = 0) -> None:
+    def set_target(self, target_ip: str, target_port: int = 0) -> None:
         with self._lock:
             self._target_ip = target_ip
-            self._quic_port = quic_port
+            self._target_port = target_port
 
     def start(self) -> int:
         """Start serving; returns the bound port."""
@@ -167,9 +167,10 @@ class MockDaemonServer:
             def do_GET(self):  # noqa: N802
                 if self.path == "/stream-target":
                     with parent._lock:
-                        payload: dict = {"target_ip": parent._target_ip, "target_port": 0}
-                        if parent._quic_port:
-                            payload["quic_port"] = parent._quic_port
+                        payload: dict = {
+                            "target_ip": parent._target_ip,
+                            "target_port": parent._target_port,
+                        }
                         body = json.dumps(payload).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -262,7 +263,7 @@ def sidecar_pair_factory(sidecar_binary, tmp_path):
         for i in range(edge_count):
             u_port = _free_udp_port()
             m_port = _free_port()
-            mock = MockDaemonServer(target_ip="127.0.0.1", quic_port=server_quic)
+            mock = MockDaemonServer(target_ip="127.0.0.1", target_port=server_quic)
             daemon_port = mock.start()
             mock_daemons.append(mock)
             edge_mock_daemons.append(mock)

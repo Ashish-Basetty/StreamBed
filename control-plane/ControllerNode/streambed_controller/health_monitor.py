@@ -23,7 +23,6 @@ from .db import (
     get_cluster_status,
     get_connection,
     get_device_address,
-    get_device_ip,
     get_device_status,
     get_last_deployment,
     set_device_status_evaluated,
@@ -117,7 +116,11 @@ class HealthMonitor:
             self.prev_device_states.update(states)
             # Reconcile unrouted edges. Replaces the lifespan-time backfill
             # that used to pick servers[0] and produce unbalanced placements.
-            assign_unrouted_edges(cluster)
+            newly_routed = assign_unrouted_edges(cluster)
+            if newly_routed:
+                # Push target immediately so the next sidecar dial succeeds
+                # without waiting for the bulk sync interval.
+                await self._push_targets_for_edges(cluster, newly_routed)
 
         now = datetime.utcnow()
         if (
@@ -272,11 +275,15 @@ class HealthMonitor:
             pushed = 0
             for row in rows:
                 cluster, edge_id, target_server = row["source_cluster"], row["source_device"], row["target_device"]
-                target_ip = self._stream_target_host(cluster, target_server)
-                if not target_ip:
-                    logger.warning(f"{cluster}/{target_server}: no IP registered, skipping target push for {edge_id}")
+                endpoint = self._stream_target_endpoint(cluster, target_server)
+                if not endpoint:
+                    logger.warning(
+                        f"{cluster}/{target_server}: no sidecar endpoint, "
+                        f"skipping target push for {edge_id}"
+                    )
                     continue
-                await self._update_edge_target(cluster, edge_id, target_ip, 9000)
+                target_ip, target_port = endpoint
+                await self._update_edge_target(cluster, edge_id, target_ip, target_port)
                 pushed += 1
             if pushed:
                 logger.info(f"Synced stream-target for {pushed} edge(s) from routing table")
@@ -304,25 +311,33 @@ class HealthMonitor:
 
         for row in rows:
             edge_id, target_server = row["source_device"], row["target_device"]
-            target_ip = self._stream_target_host(cluster, target_server)
-            if not target_ip:
+            endpoint = self._stream_target_endpoint(cluster, target_server)
+            if not endpoint:
                 logger.error(
-                    f"{cluster}/{edge_id}: cannot push target, no IP for {target_server}"
+                    f"{cluster}/{edge_id}: cannot push target, no sidecar endpoint for {target_server}"
                 )
                 continue
-            await self._update_edge_target(cluster, edge_id, target_ip, 9000)
+            target_ip, target_port = endpoint
+            await self._update_edge_target(cluster, edge_id, target_ip, target_port)
 
-    def _stream_target_host(self, cluster: str, target_server: str) -> str | None:
-        """Return the address an edge sidecar should dial for its server peer.
+    def _stream_target_endpoint(
+        self, cluster: str, target_server: str
+    ) -> tuple[str, int] | None:
+        """Return the (host_ip, host_port) an edge sidecar should dial for its server peer.
 
-        If the server deployment has a sidecar, the QUIC peer is that sidecar
-        container. Fall back to the registered daemon address for older
-        deployments that predate sidecar runtime identity.
+        Source of truth: the `deployments` row written when the controller
+        forwarded `/deploy` to the server's daemon. If the server has no
+        deployment yet (no model loaded), return None so callers can skip
+        the push rather than route to a stale fallback.
         """
         deployment = get_last_deployment(cluster, target_server)
-        if deployment and deployment.get("sidecar_name"):
-            return deployment["sidecar_name"]
-        return get_device_ip(cluster, target_server)
+        if not deployment:
+            return None
+        ip = deployment.get("sidecar_host_ip")
+        port = deployment.get("sidecar_host_port")
+        if not ip or not isinstance(port, int):
+            return None
+        return (ip, port)
 
     async def _update_edge_target(
         self,

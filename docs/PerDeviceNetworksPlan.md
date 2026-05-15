@@ -94,21 +94,30 @@ The 1:1 inference↔sidecar invariant (one sidecar per inference container,
 co-located on the same device net, lifetime-tied) is already true today; the
 plan codifies it as an explicit assertion in `spawn_sidecar`.
 
-## Heartbeat carries the current sidecar address
+## Sidecar address propagation (implemented)
 
-`/deploy` returns the initial address so the first edge dial doesn't have to
-wait for a heartbeat. But the **durable source of truth** is the heartbeat:
-each daemon includes `{sidecar_host_ip, sidecar_host_port}` in every
-heartbeat. The controller writes it into the `deployments` row; on change,
-it re-pushes the affected edges' `/stream-target`.
+Heartbeats today come from the **inference container**, not the daemon
+([shared/heartbeat.py:18](../shared/heartbeat.py#L18)), so the original idea
+of "daemon heartbeat carries the sidecar endpoint" did not fit cleanly. We
+dropped heartbeat-carried propagation for v1 and rely on three triggers
+instead:
 
-Why both:
-- `/deploy` response = fast first-time propagation, avoids edge dial latency.
-- Heartbeat = survives daemon restart, sidecar restart, port re-assignment.
+1. **`/deploy` response** carries `sidecar_host_ip` + `sidecar_host_port`.
+   `record_deployment()` writes both to the `deployments` row.
+2. **Immediate push from `/deploy`** for servers: after recording the
+   deployment, the controller's `_push_target_to_routed_edges()` PUTs
+   `/stream-target` on every edge currently routed to this server. Catches
+   the case where the edges registered first and the server's deployment
+   landed after.
+3. **Push on new route assignment**: the routing tick's
+   `assign_unrouted_edges()` return value drives a `_push_targets_for_edges`
+   call so an edge that gets routed *after* the server deployed also receives
+   its target without waiting for the 30s bulk sync.
 
-Downsides accepted: heartbeat payload grows a bit; controller has to diff
-incoming heartbeat against stored row and conditionally re-push. Both are
-cheap.
+Daemon state (`deployed.json`) persists the picked sidecar host port so
+daemon restarts reuse the same port, keeping the stored endpoint stable.
+Heartbeat-carried updates can be added later if sidecar port churn becomes a
+real concern.
 
 ## Critical files to modify
 

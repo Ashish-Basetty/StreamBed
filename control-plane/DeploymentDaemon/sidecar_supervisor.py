@@ -29,11 +29,17 @@ def spawn_sidecar(
     daemon_url: str,
     peer_quic_port: int,
     local_udp_bind: str,
-    quic_bind: str
+    quic_bind: str,
+    host_udp_port: int,
 ) -> str | None:
     """Launch the sidecar container. Idempotent: removes any existing one first.
 
     Returns the new container name or None on failure.
+
+    The sidecar's QUIC UDP port (`peer_quic_port` inside the container) is
+    published to `host_udp_port` on the daemon's host so cross-device peers
+    can reach it without sharing a Docker network. 1:1 with the inference
+    container — caller picks the host port before spawn so there's no race.
 
     Edge role: polls daemon_url/stream-target every 15 s for the current peer.
     """
@@ -67,6 +73,7 @@ def spawn_sidecar(
         "name": name,
         "detach": True,
         "environment": env,
+        "ports": {f"{peer_quic_port}/udp": host_udp_port},
         # Explicit json-file so `docker logs` always reads from the default file driver
         # (avoids empty-log edge cases on some Docker Desktop setups).
         "log_config": LogConfig(type="json-file"),
@@ -84,7 +91,10 @@ def spawn_sidecar(
 
     try:
         client.containers.run(image, **run_kwargs)
-        logger.info(f"[Daemon] sidecar spawned: {name} role={role} daemon={daemon_url} network={network}")
+        logger.info(
+            f"[Daemon] sidecar spawned: {name} role={role} daemon={daemon_url} "
+            f"network={network} host_udp={host_udp_port}"
+        )
         return name
     except docker.errors.ImageNotFound:
         logger.error(f"[Daemon] sidecar: image not found: {image}")

@@ -10,7 +10,6 @@ import sys
 import time
 from pathlib import Path
 
-import httpx
 import pytest
 
 from tests.deploy_utils import _wait_for_controller, _wait_for_daemons, delete_device
@@ -29,7 +28,6 @@ _CONTROLLER_URL = "http://localhost:8080"
 _EDGE_HOST_PORT = 9100
 _EDGE_SIDECAR = "streambed-default-edge-001-sidecar"
 _SERVER_SIDECAR = "streambed-default-server-001-sidecar"
-_EDGE_DAEMON_URL = "http://localhost:9090"
 
 
 def _run(cmd: list[str], *, timeout: int, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -149,15 +147,6 @@ def _assert_server_advised(logs: str) -> None:
     assert counts and max(counts) > 0, f"advisor server never produced advice\n{logs}"
 
 
-def _set_stream_target() -> None:
-    with httpx.Client(timeout=10) as client:
-        resp = client.put(
-            f"{_EDGE_DAEMON_URL}/stream-target",
-            json={"target_ip": _SERVER_SIDECAR, "target_port": 9000},
-        )
-        resp.raise_for_status()
-
-
 def _print_docker_ps_before_log_wait() -> None:
     """Show which containers this pytest process's `docker` CLI sees (debug context/network)."""
     result = _run(["docker", "ps"], timeout=30)
@@ -251,8 +240,9 @@ def test_advisor_phase_d_docker_smoke_one_episode(tmp_path: Path, keep_docker: b
             },
         )
         _assert_success(deploy, "advisor deploy")
-        _set_stream_target()
-        _wait_for_log(_EDGE_SIDECAR, "QUIC connected")
+        # Controller pushes stream-target to the edge after the routing tick
+        # picks up the now-deployed server; no manual push needed.
+        _wait_for_log(_EDGE_SIDECAR, "QUIC connected", timeout_s=60.0)
 
         frame_gen = _run(
             [

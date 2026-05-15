@@ -283,14 +283,16 @@ def list_deployments(device_cluster: str | None = None) -> dict:
         if device_cluster:
             rows = conn.execute(
                 """SELECT device_cluster, device_id, device_type, image, host_port, container_port,
-                          managing_daemon_id, container_hash, container_name, sidecar_name, status, deployed_at
+                          managing_daemon_id, container_hash, container_name, sidecar_name,
+                          sidecar_host_ip, sidecar_host_port, status, deployed_at
                    FROM deployments WHERE device_cluster = ?""",
                 (device_cluster,),
             ).fetchall()
         else:
             rows = conn.execute(
                 """SELECT device_cluster, device_id, device_type, image, host_port, container_port,
-                          managing_daemon_id, container_hash, container_name, sidecar_name, status, deployed_at
+                          managing_daemon_id, container_hash, container_name, sidecar_name,
+                          sidecar_host_ip, sidecar_host_port, status, deployed_at
                    FROM deployments"""
             ).fetchall()
         return {"deployments": [dict(row) for row in rows]}

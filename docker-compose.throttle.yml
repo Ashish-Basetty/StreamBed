@@ -1,5 +1,8 @@
 # StreamBed with throttle proxy for dynamic interleaving tests.
 # Extends main compose: adds throttle-proxy between daemon and server.
+# Attached to the server-001 device network so it can resolve `server-001`
+# (the inference container's in-device alias) and forward the throttled
+# UDP stream to it.
 # Run: docker compose -f docker-compose.yml -f docker-compose.throttle.yml up -d
 
 version: "3.9"
@@ -19,4 +22,8 @@ services:
       - TARGET_PORT=9000
       - THROTTLE_RATE_BPS=50000
     networks:
-      - streambed-net
+      - streambed-device-server-001-net
+
+networks:
+  streambed-device-server-001-net:
+    name: streambed-device-server-001-net

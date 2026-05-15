@@ -108,7 +108,7 @@ def test_reroute_on_target_change(sidecar_binary, tmp_path):
     wait_for_metrics(f"http://127.0.0.1:{metrics_b}/metrics")
 
     # --- mock daemon: initially points to server A ---
-    mock = MockDaemonServer(target_ip="127.0.0.1", quic_port=quic_a)
+    mock = MockDaemonServer(target_ip="127.0.0.1", target_port=quic_a)
     daemon_port = mock.start()
 
     # --- edge sidecar ---
@@ -149,7 +149,7 @@ def test_reroute_on_target_change(sidecar_binary, tmp_path):
             infer_a.close()
 
         # Reroute: update mock daemon to point to server B.
-        mock.set_target(target_ip="127.0.0.1", quic_port=quic_b)
+        mock.set_target(target_ip="127.0.0.1", target_port=quic_b)
 
         infer_b = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         infer_b.bind(("127.0.0.1", 0))

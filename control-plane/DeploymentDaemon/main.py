@@ -9,17 +9,21 @@ import httpx
 import uvicorn
 from daemon_config import (
     CONTROLLER_URL,
-    DAEMON_ADDRESS,
     DAEMON_PORT,
+    DAEMON_PUBLIC_IP,
+    DAEMON_PUBLIC_PORT,
     DEFAULT_CONTAINER_PORT,
     DEFAULT_HOST_PORT,
     DEVICE_CLUSTER,
     DEVICE_ID,
+    DEVICE_NETWORK_NAME,
     DEVICE_TYPE,
     REGISTER_RETRIES,
     REGISTER_RETRY_DELAY,
     SIDECAR_IMAGE,
     SIDECAR_LOCAL_UDP_PORT,
+    SIDECAR_PORT_RANGE_MAX,
+    SIDECAR_PORT_RANGE_MIN,
     SIDECAR_QUIC_BIND_PORT,
     STATE_PATH,
     STREAM_TARGET_PATH,
@@ -73,10 +77,55 @@ def _load_state() -> dict | None:
         return None
 
 
-def _save_state(container_hash: str, image: str) -> None:
+def _save_state(container_hash: str, image: str, sidecar_host_port: int) -> None:
     """Persist deployed container state."""
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps({"container_hash": container_hash, "image": image}, indent=2))
+    STATE_PATH.write_text(
+        json.dumps(
+            {
+                "container_hash": container_hash,
+                "image": image,
+                "sidecar_host_port": sidecar_host_port,
+            },
+            indent=2,
+        )
+    )
+
+
+def _pick_free_udp_port() -> int:
+    """Return an unused UDP port from the configured range.
+
+    Bind probe in randomized order so two daemons on the same host won't
+    deterministically race for the same port. The probe socket is closed
+    before we hand the port to Docker, so there is a tiny TOCTOU window;
+    in practice Docker's port allocator surfaces the collision as a
+    container-start error which the caller can retry.
+    """
+    import random
+    import socket
+
+    persisted = _load_state() or {}
+    candidates = list(range(SIDECAR_PORT_RANGE_MIN, SIDECAR_PORT_RANGE_MAX + 1))
+    # Prefer the previously-picked port so daemon restarts keep a stable endpoint.
+    prior = persisted.get("sidecar_host_port")
+    if isinstance(prior, int) and SIDECAR_PORT_RANGE_MIN <= prior <= SIDECAR_PORT_RANGE_MAX:
+        candidates.remove(prior)
+        candidates.insert(0, prior)
+    # Randomize the rest so collisions self-resolve.
+    tail = candidates[1:] if prior is not None else candidates[:]
+    random.shuffle(tail)
+    candidates = (candidates[:1] if prior is not None else []) + tail
+
+    for port in candidates:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            try:
+                s.bind(("0.0.0.0", port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError(
+        f"no free UDP port in [{SIDECAR_PORT_RANGE_MIN}, {SIDECAR_PORT_RANGE_MAX}]"
+    )
 
 
 def _stop_and_remove(container_name: str) -> bool:
@@ -116,8 +165,8 @@ async def _register_with_retries() -> None:
         "device_cluster": DEVICE_CLUSTER,
         "device_id": DEVICE_ID,
         "device_type": DEVICE_TYPE,
-        "ip": DAEMON_ADDRESS,
-        "port": DAEMON_PORT
+        "ip": DAEMON_PUBLIC_IP,
+        "port": DAEMON_PUBLIC_PORT,
     }
     last_err: Exception | None = None
     for attempt in range(REGISTER_RETRIES):
@@ -167,18 +216,27 @@ def _wait_running(client, name: str, timeout: int = 30) -> None:
     logger.warning(f"[Daemon] container {name} not running after {timeout}s")
 
 
-def _spawn_sidecar_for_role() -> str | None:
-    """Spawn the QUIC sidecar matching this daemon's role."""
+def _spawn_sidecar_for_role(sidecar_host_port: int) -> str | None:
+    """Spawn the QUIC sidecar matching this daemon's role.
+
+    The sidecar dials the daemon on the device network. Docker DNS resolves
+    the daemon's container hostname (its container ID, from /etc/hostname)
+    inside that network — no host-port hop for the sidecar→daemon path.
+    """
+    import socket
+
     role = "edge" if DEVICE_TYPE == "edge" else "server"
+    daemon_in_net = socket.gethostname()
     return spawn_sidecar(
         cluster=DEVICE_CLUSTER,
         device_id=DEVICE_ID,
         role=role,
         image=SIDECAR_IMAGE,
-        daemon_url=f"http://{DAEMON_ADDRESS}:{DAEMON_PORT}",
+        daemon_url=f"http://{daemon_in_net}:{DAEMON_PORT}",
         peer_quic_port=SIDECAR_QUIC_BIND_PORT,
         local_udp_bind=f"0.0.0.0:{SIDECAR_LOCAL_UDP_PORT}",
-        quic_bind=f"0.0.0.0:{SIDECAR_QUIC_BIND_PORT}"
+        quic_bind=f"0.0.0.0:{SIDECAR_QUIC_BIND_PORT}",
+        host_udp_port=sidecar_host_port,
     )
 
 
@@ -215,8 +273,27 @@ def _remove_managed_inference_containers(client: docker.DockerClient) -> int:
     return removed
 
 
+def _ensure_device_network() -> None:
+    """Create this daemon's device network if it doesn't already exist.
+
+    Compose pre-declares the network for the fixed-fleet daemons, but a daemon
+    spun up outside compose (single-VM bringup, ad-hoc test) needs the network
+    to exist before it can attach the sidecar + inference to it.
+    """
+    try:
+        client = _get_docker()
+        try:
+            client.networks.get(DEVICE_NETWORK_NAME)
+        except docker.errors.NotFound:
+            client.networks.create(DEVICE_NETWORK_NAME, driver="bridge")
+            logger.info(f"[Daemon] created device network {DEVICE_NETWORK_NAME}")
+    except Exception:
+        logger.exception("[Daemon] failed to ensure device network")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _ensure_device_network()
     await _register_with_retries()
 
     yield
@@ -303,12 +380,17 @@ def deploy(body: DeployRequest) -> dict:
         if network:
             connect_kw: dict = {}
             if DEVICE_TYPE == "server":
+                # In-device DNS alias so co-tenants on the server's device
+                # network (e.g. the throttle proxy) can dial `server-001`
+                # without knowing the hashed container name.
                 connect_kw["aliases"] = [DEVICE_ID]
             client.networks.get(network).connect(container, **connect_kw)
         container.start()
-        _save_state(deploy_hash, body.image)
 
-        sidecar_name = _spawn_sidecar_for_role()
+        sidecar_host_port = _pick_free_udp_port()
+        _save_state(deploy_hash, body.image, sidecar_host_port)
+
+        sidecar_name = _spawn_sidecar_for_role(sidecar_host_port)
 
         # Wait for both containers to reach "running" before returning so that
         # callers (e.g. deploy scripts) can safely proceed.  The inference
@@ -326,6 +408,8 @@ def deploy(body: DeployRequest) -> dict:
             "container_hash": deploy_hash,
             "container_name": new_container,
             "sidecar_name": sidecar_name,
+            "sidecar_host_ip": DAEMON_PUBLIC_IP,
+            "sidecar_host_port": sidecar_host_port,
         }
     except docker.errors.ImageNotFound:
         _stop_and_remove(new_container)

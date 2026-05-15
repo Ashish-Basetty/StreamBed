@@ -1,7 +1,6 @@
 """Deployment daemon configuration from environment."""
 
 import os
-import platform
 from pathlib import Path
 
 DEVICE_ID = os.environ.get("DEVICE_ID", "")
@@ -18,8 +17,26 @@ if not CONTROLLER_URL:
 if not DEVICE_TYPE:
     raise ValueError("DEVICE_TYPE is not set")
 
+# In-container bind port (uvicorn listens here).
 DAEMON_PORT = int(os.environ.get("DAEMON_PORT", "9090"))
-DAEMON_ADDRESS = os.environ.get("DAEMON_ADDRESS", platform.node())
+
+# Host-routable address the controller uses to reach this daemon.
+# Local Docker: `host.docker.internal` (require `extra_hosts: host-gateway` in compose).
+# GCP: the VM's internal subnet IP.
+DAEMON_PUBLIC_IP = os.environ.get("DAEMON_PUBLIC_IP", "").strip()
+if not DAEMON_PUBLIC_IP:
+    raise ValueError("DAEMON_PUBLIC_IP is not set")
+
+# Host-published port that maps to DAEMON_PORT inside the container.
+# In compose, each daemon publishes a unique host port (e.g. 9090, 9091…).
+DAEMON_PUBLIC_PORT = int(os.environ.get("DAEMON_PUBLIC_PORT", "0"))
+if DAEMON_PUBLIC_PORT <= 0:
+    raise ValueError("DAEMON_PUBLIC_PORT must be set to the host-published port for this daemon")
+
+# Docker network this daemon owns. Daemon-spawned sidecar + inference attach here.
+DEVICE_NETWORK_NAME = os.environ.get(
+    "DEVICE_NETWORK_NAME", f"streambed-device-{DEVICE_ID}-net"
+)
 
 DEFAULT_HOST_PORT = int(os.environ.get("STREAMBED_HOST_PORT", "8080"))
 DEFAULT_CONTAINER_PORT = int(os.environ.get("STREAMBED_CONTAINER_PORT", "80"))
@@ -45,6 +62,13 @@ VIDEO_SERVER_PORT = int(os.environ.get("VIDEO_SERVER_PORT", "9200"))
 SIDECAR_IMAGE = os.environ.get("SIDECAR_IMAGE", "ashishbasetty/streambed-quic-sidecar:latest")
 SIDECAR_LOCAL_UDP_PORT = int(os.environ.get("SIDECAR_LOCAL_UDP_PORT", "9050"))
 SIDECAR_QUIC_BIND_PORT = int(os.environ.get("SIDECAR_QUIC_BIND_PORT", "4433"))
+
+# Host UDP port pool for sidecar QUIC publication. Daemon picks a free port
+# from this inclusive range before spawning the sidecar.
+SIDECAR_PORT_RANGE_MIN = int(os.environ.get("SIDECAR_PORT_RANGE_MIN", "7000"))
+SIDECAR_PORT_RANGE_MAX = int(os.environ.get("SIDECAR_PORT_RANGE_MAX", "7999"))
+if SIDECAR_PORT_RANGE_MIN <= 0 or SIDECAR_PORT_RANGE_MAX < SIDECAR_PORT_RANGE_MIN:
+    raise ValueError("SIDECAR_PORT_RANGE_MIN/MAX invalid")
 
 # Device Registration retry configuration
 REGISTER_RETRIES = 5

@@ -148,9 +148,9 @@ func Run(ctx context.Context, cfg Config) error {
 // peer "ip:port" on ch whenever the resolved peer address changes. Fires once
 // immediately on startup so the first connection does not wait a full interval.
 //
-// The JSON response may include an optional "quic_port" field; if present it
-// overrides peerQUICPort for that target. This lets tests (and multi-port
-// deployments) specify exact QUIC ports without a separate env var.
+// The JSON response includes a "target_port" field carrying the peer sidecar's
+// published host UDP port (host-port addressing under per-device networks).
+// peerQUICPort is the legacy fallback used only if the daemon omits the port.
 func pollDaemonTarget(ctx context.Context, daemonURL string, peerQUICPort int, ch chan<- string) {
 	url := daemonURL + "/stream-target"
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -200,14 +200,14 @@ func fetchTarget(ctx context.Context, url string, client *http.Client) (ip strin
 	}
 	defer resp.Body.Close()
 	var result struct {
-		TargetIP string `json:"target_ip"`
-		QUICPort int    `json:"quic_port,omitempty"`
+		TargetIP   string `json:"target_ip"`
+		TargetPort int    `json:"target_port,omitempty"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		log.Printf("edge: decode daemon response: %v", err)
 		return "", 0
 	}
-	return result.TargetIP, result.QUICPort
+	return result.TargetIP, result.TargetPort
 }
 
 func pumpUDPToQUIC(ctx context.Context, udp *net.UDPConn, conn *quictransport.Conn, cfg Config, lastApp *atomic.Pointer[net.UDPAddr]) error {

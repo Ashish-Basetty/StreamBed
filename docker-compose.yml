@@ -1,8 +1,21 @@
 # StreamBed: controller + deployment daemons per device.
-# Daemons register with the controller; a launch script deploys edge/server containers.
-# Run from project root. Create daemon-data dirs first: mkdir -p daemon-data/{edge1,edge2,edge3,server1,server2}/{streambed}
+#
+# Per-device Docker networks: each daemon owns its own bridge network that
+# contains the daemon + the sidecar + the inference container it spawns.
+# Controller and router live on a separate `streambed-control-net`.
+#
+# Cross-device communication is host-port: each sidecar publishes its QUIC
+# UDP port to the host, and daemons register with the controller using
+# `host.docker.internal` as their public IP. No cross-net Docker DNS.
+#
+# Run from project root. Create daemon-data dirs first:
+#   mkdir -p daemon-data/{edge1,edge2,edge3,server1,server2}/{streambed}
 
 version: "3.9"
+
+x-host-gateway: &host-gateway
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
 
 services:
   controller:
@@ -18,7 +31,7 @@ services:
     environment:
       - HEARTBEAT_TIMEOUT_SECS=30
     networks:
-      - streambed-net
+      - streambed-control-net
 
   router:
     build:
@@ -35,10 +48,11 @@ services:
     depends_on:
       - controller
     networks:
-      - streambed-net
+      - streambed-control-net
 
   # --- Edge daemons (each manages an edge container) ---
   daemon-edge1:
+    <<: *host-gateway
     build:
       context: .
       dockerfile: control-plane/DeploymentDaemon/Dockerfile
@@ -54,18 +68,23 @@ services:
       - STREAMBED_HOST_PORT=8000
       - STREAMBED_CONTAINER_PORT=8000
       - STREAMBED_MEMORY_LIMIT=6g
-      - CONTROLLER_URL=http://controller:8080
+      - CONTROLLER_URL=http://host.docker.internal:8080
       - DEVICE_ID=edge-001
       - DEVICE_TYPE=edge
       - DEVICE_CLUSTER=default
-      - DAEMON_ADDRESS=daemon-edge1
+      - DAEMON_PUBLIC_IP=host.docker.internal
+      - DAEMON_PUBLIC_PORT=9090
+      - DEVICE_NETWORK_NAME=streambed-device-edge-001-net
       - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
+      - SIDECAR_PORT_RANGE_MIN=7001
+      - SIDECAR_PORT_RANGE_MAX=7100
     depends_on:
       - controller
     networks:
-      - streambed-net
+      - streambed-device-edge-001-net
 
   daemon-edge2:
+    <<: *host-gateway
     build:
       context: .
       dockerfile: control-plane/DeploymentDaemon/Dockerfile
@@ -81,18 +100,23 @@ services:
       - STREAMBED_HOST_PORT=8002
       - STREAMBED_CONTAINER_PORT=8000
       - STREAMBED_MEMORY_LIMIT=6g
-      - CONTROLLER_URL=http://controller:8080
+      - CONTROLLER_URL=http://host.docker.internal:8080
       - DEVICE_ID=edge-002
       - DEVICE_TYPE=edge
       - DEVICE_CLUSTER=default
-      - DAEMON_ADDRESS=daemon-edge2
+      - DAEMON_PUBLIC_IP=host.docker.internal
+      - DAEMON_PUBLIC_PORT=9091
+      - DEVICE_NETWORK_NAME=streambed-device-edge-002-net
       - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
+      - SIDECAR_PORT_RANGE_MIN=7101
+      - SIDECAR_PORT_RANGE_MAX=7200
     depends_on:
       - controller
     networks:
-      - streambed-net
+      - streambed-device-edge-002-net
 
   daemon-edge3:
+    <<: *host-gateway
     build:
       context: .
       dockerfile: control-plane/DeploymentDaemon/Dockerfile
@@ -108,19 +132,24 @@ services:
       - STREAMBED_HOST_PORT=8003
       - STREAMBED_CONTAINER_PORT=8000
       - STREAMBED_MEMORY_LIMIT=6g
-      - CONTROLLER_URL=http://controller:8080
+      - CONTROLLER_URL=http://host.docker.internal:8080
       - DEVICE_ID=edge-003
       - DEVICE_TYPE=edge
       - DEVICE_CLUSTER=default
-      - DAEMON_ADDRESS=daemon-edge3
+      - DAEMON_PUBLIC_IP=host.docker.internal
+      - DAEMON_PUBLIC_PORT=9092
+      - DEVICE_NETWORK_NAME=streambed-device-edge-003-net
       - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
+      - SIDECAR_PORT_RANGE_MIN=7201
+      - SIDECAR_PORT_RANGE_MAX=7300
     depends_on:
       - controller
     networks:
-      - streambed-net
+      - streambed-device-edge-003-net
 
   # --- Server daemons (each manages a server container) ---
   daemon-server1:
+    <<: *host-gateway
     build:
       context: .
       dockerfile: control-plane/DeploymentDaemon/Dockerfile
@@ -136,18 +165,23 @@ services:
       - STREAMBED_HOST_PORT=8001
       - STREAMBED_CONTAINER_PORT=8001
       - STREAMBED_MEMORY_LIMIT=6g
-      - CONTROLLER_URL=http://controller:8080
+      - CONTROLLER_URL=http://host.docker.internal:8080
       - DEVICE_ID=server-001
       - DEVICE_TYPE=server
       - DEVICE_CLUSTER=default
-      - DAEMON_ADDRESS=daemon-server1
+      - DAEMON_PUBLIC_IP=host.docker.internal
+      - DAEMON_PUBLIC_PORT=9093
+      - DEVICE_NETWORK_NAME=streambed-device-server-001-net
       - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
+      - SIDECAR_PORT_RANGE_MIN=7301
+      - SIDECAR_PORT_RANGE_MAX=7400
     depends_on:
       - controller
     networks:
-      - streambed-net
+      - streambed-device-server-001-net
 
   daemon-server2:
+    <<: *host-gateway
     build:
       context: .
       dockerfile: control-plane/DeploymentDaemon/Dockerfile
@@ -163,17 +197,37 @@ services:
       - STREAMBED_HOST_PORT=8004
       - STREAMBED_CONTAINER_PORT=8001
       - STREAMBED_MEMORY_LIMIT=6g
-      - CONTROLLER_URL=http://controller:8080
+      - CONTROLLER_URL=http://host.docker.internal:8080
       - DEVICE_ID=server-002
       - DEVICE_TYPE=server
       - DEVICE_CLUSTER=default
-      - DAEMON_ADDRESS=daemon-server2
+      - DAEMON_PUBLIC_IP=host.docker.internal
+      - DAEMON_PUBLIC_PORT=9094
+      - DEVICE_NETWORK_NAME=streambed-device-server-002-net
       - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
+      - SIDECAR_PORT_RANGE_MIN=7401
+      - SIDECAR_PORT_RANGE_MAX=7500
     depends_on:
       - controller
     networks:
-      - streambed-net
+      - streambed-device-server-002-net
 
 networks:
-  streambed-net:
+  streambed-control-net:
+    name: streambed-control-net
+    driver: bridge
+  streambed-device-edge-001-net:
+    name: streambed-device-edge-001-net
+    driver: bridge
+  streambed-device-edge-002-net:
+    name: streambed-device-edge-002-net
+    driver: bridge
+  streambed-device-edge-003-net:
+    name: streambed-device-edge-003-net
+    driver: bridge
+  streambed-device-server-001-net:
+    name: streambed-device-server-001-net
+    driver: bridge
+  streambed-device-server-002-net:
+    name: streambed-device-server-002-net
     driver: bridge

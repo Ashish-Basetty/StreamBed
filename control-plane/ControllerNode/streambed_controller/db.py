@@ -78,6 +78,8 @@ def init_db() -> None:
                 container_hash TEXT,
                 container_name TEXT,
                 sidecar_name TEXT,
+                sidecar_host_ip TEXT NOT NULL,
+                sidecar_host_port INTEGER NOT NULL,
                 status TEXT DEFAULT 'running',
                 deployed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (device_cluster, device_id)
@@ -253,6 +255,8 @@ def record_deployment(
     device_id: str,
     device_type: str,
     image: str,
+    sidecar_host_ip: str,
+    sidecar_host_port: int,
     host_port: int | None = None,
     container_port: int | None = None,
     managing_daemon_id: str | None = None,
@@ -268,9 +272,10 @@ def record_deployment(
             """
             INSERT INTO deployments (
                 device_cluster, device_id, device_type, image, host_port, container_port,
-                managing_daemon_id, container_hash, container_name, sidecar_name, status, deployed_at
+                managing_daemon_id, container_hash, container_name, sidecar_name,
+                sidecar_host_ip, sidecar_host_port, status, deployed_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(device_cluster, device_id) DO UPDATE SET
                 device_type = excluded.device_type,
                 image = excluded.image,
@@ -280,6 +285,8 @@ def record_deployment(
                 container_hash = excluded.container_hash,
                 container_name = excluded.container_name,
                 sidecar_name = excluded.sidecar_name,
+                sidecar_host_ip = excluded.sidecar_host_ip,
+                sidecar_host_port = excluded.sidecar_host_port,
                 status = excluded.status,
                 deployed_at = CURRENT_TIMESTAMP
             """,
@@ -294,6 +301,8 @@ def record_deployment(
                 container_hash,
                 container_name,
                 sidecar_name,
+                sidecar_host_ip,
+                sidecar_host_port,
                 status,
             ),
         )
@@ -324,7 +333,8 @@ def get_last_deployment(
     try:
         row = conn.execute(
             """SELECT device_cluster, device_id, device_type, image, host_port, container_port,
-                      managing_daemon_id, container_hash, container_name, sidecar_name, status, deployed_at
+                      managing_daemon_id, container_hash, container_name, sidecar_name,
+                      sidecar_host_ip, sidecar_host_port, status, deployed_at
                FROM deployments WHERE device_cluster = ? AND device_id = ?
                ORDER BY deployed_at DESC LIMIT 1""",
             (device_cluster, device_id),
@@ -352,7 +362,8 @@ def get_cluster_deployments(device_cluster: str) -> dict[str, dict]:
     try:
         rows = conn.execute(
             """SELECT device_cluster, device_id, device_type, image, host_port, container_port,
-                      managing_daemon_id, container_hash, container_name, sidecar_name, status, deployed_at
+                      managing_daemon_id, container_hash, container_name, sidecar_name,
+                      sidecar_host_ip, sidecar_host_port, status, deployed_at
                FROM deployments WHERE device_cluster = ?
                ORDER BY device_id""",
             (device_cluster,),

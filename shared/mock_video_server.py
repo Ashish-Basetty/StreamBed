@@ -50,7 +50,10 @@ class MockVideoServer:
         self._server = await asyncio.start_server(
             self._handle_client, self.host, self.port
         )
-        await self._server.serve_forever()
+        try:
+            await self._server.serve_forever()
+        except asyncio.CancelledError:
+            pass
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter

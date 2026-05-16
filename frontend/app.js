@@ -116,6 +116,7 @@ function app() {
           current_model: s.current_model || null,
           status: s.status || null,
           last_heartbeat: s.last_heartbeat || null,
+          data_flow_state: s.data_flow_state || null,
           deployed_image: dep ? dep.image : null,
           deployed_at: dep ? dep.deployed_at : null,
           _newImage: prior._newImage || '',
@@ -181,6 +182,19 @@ function app() {
       if (s === 'unresponsive') return 'badge-unresponsive';
       if (s.includes('fail')) return 'badge-failure';
       return 'badge-unknown';
+    },
+
+    flowClass(state) {
+      if (state === 'flowing') return 'flow-flowing';
+      if (state === 'idle') return 'flow-idle';
+      return 'flow-unknown';
+    },
+
+    flowLabel(state) {
+      if (state === 'flowing') return 'Flowing';
+      if (state === 'idle') return 'Idle';
+      if (state === 'unknown') return 'No data yet';
+      return null;
     },
 
     fmtTime(ts) {

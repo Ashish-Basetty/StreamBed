@@ -31,7 +31,6 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 
-from shared.heartbeat import heartbeat_loop
 from shared.interfaces.stream_interface import StreamBedUDPServerDuplex
 
 log = logging.getLogger("advisor_server")
@@ -75,7 +74,6 @@ def encode_advice(timestamp: float, logits: np.ndarray) -> bytes:
 
 
 async def serve(args: argparse.Namespace, advisor: Advisor) -> None:
-    heartbeat_task = asyncio.create_task(heartbeat_loop(model_version="advisor-server"))
     duplex = StreamBedUDPServerDuplex()
     if args.bind_udp:
         host, port = _parse_bind_udp(args.bind_udp)
@@ -133,11 +131,6 @@ async def serve(args: argparse.Namespace, advisor: Advisor) -> None:
                 chnk_count = 0
                 last_log_ts = time.monotonic()
     finally:
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except (asyncio.CancelledError, Exception):
-            pass
         await duplex.close()
 
 

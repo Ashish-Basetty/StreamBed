@@ -237,6 +237,8 @@ def _spawn_sidecar_for_role(sidecar_host_port: int) -> str | None:
         local_udp_bind=f"0.0.0.0:{SIDECAR_LOCAL_UDP_PORT}",
         quic_bind=f"0.0.0.0:{SIDECAR_QUIC_BIND_PORT}",
         host_udp_port=sidecar_host_port,
+        controller_url=CONTROLLER_URL,
+        sidecar_host_ip=DAEMON_PUBLIC_IP,
     )
 
 
@@ -312,6 +314,39 @@ app = FastAPI(title="StreamBed Deployment Daemon", lifespan=lifespan)
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/inference-status")
+def inference_status() -> dict:
+    """Report whether this daemon's inference container is alive.
+
+    Source of truth: `docker inspect` of the daemon's own labelled inference
+    container. Used by the sidecar to piggyback an `inference_alive` flag
+    onto its controller heartbeat — gives the controller a way to detect
+    inference death without conflating it with "no input traffic" (idle
+    data flow can mean either, only this signal can disambiguate).
+    """
+    try:
+        client = _get_docker()
+        containers = client.containers.list(
+            all=True,
+            filters={
+                "label": managed_label_filters(
+                    cluster=DEVICE_CLUSTER,
+                    device_id=DEVICE_ID,
+                    role=ROLE_INFERENCE,
+                )
+            },
+        )
+        # Multiple matches can exist transiently during redeploy; the
+        # newest one wins. None at all → no container deployed → not alive.
+        alive = any(c.status == "running" for c in containers)
+        return {"alive": alive}
+    except Exception as e:
+        logger.warning("[Daemon] /inference-status: %s", e)
+        # Conservative: report alive on transient docker errors so the
+        # controller doesn't restart something that may actually be fine.
+        return {"alive": True, "error": str(e)}
 
 
 @app.post("/deploy")

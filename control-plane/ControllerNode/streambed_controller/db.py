@@ -45,7 +45,9 @@ def init_db() -> None:
                 PRIMARY KEY (device_cluster, device_id)
             );
 
-            -- Status table: heartbeats keyed by device_cluster/device_id
+            -- Status table: heartbeats keyed by device_cluster/device_id.
+            -- sidecar_host_ip/port + dg_total/data_flow_state are populated
+            -- by the sidecar heartbeat (and bootstrapped at deploy time).
             CREATE TABLE IF NOT EXISTS device_status (
                 device_cluster TEXT NOT NULL,
                 device_id TEXT NOT NULL,
@@ -53,6 +55,11 @@ def init_db() -> None:
                 status TEXT,
                 last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 retry_count INTEGER DEFAULT 0,
+                sidecar_host_ip TEXT,
+                sidecar_host_port INTEGER,
+                dg_total INTEGER,
+                data_flow_state TEXT,
+                inference_alive INTEGER,  -- 1=alive, 0=dead, NULL=no heartbeat yet
                 PRIMARY KEY (device_cluster, device_id)
             );
 
@@ -66,7 +73,8 @@ def init_db() -> None:
                 PRIMARY KEY (source_cluster, source_device)
             );
 
-            -- Deployments: last deployment config per device (for restarts)
+            -- Deployments: deploy intent (image + port mapping). Runtime
+            -- state like the sidecar host endpoint lives in device_status.
             CREATE TABLE IF NOT EXISTS deployments (
                 device_cluster TEXT NOT NULL,
                 device_id TEXT NOT NULL,
@@ -74,12 +82,8 @@ def init_db() -> None:
                 image TEXT NOT NULL,
                 host_port INTEGER,
                 container_port INTEGER,
-                managing_daemon_id TEXT,
                 container_hash TEXT,
                 container_name TEXT,
-                sidecar_name TEXT,
-                sidecar_host_ip TEXT NOT NULL,
-                sidecar_host_port INTEGER NOT NULL,
                 status TEXT DEFAULT 'running',
                 deployed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (device_cluster, device_id)
@@ -225,7 +229,8 @@ def get_device_status(
     try:
         row = conn.execute(
             """SELECT device_cluster, device_id, current_model, status, last_heartbeat,
-                      COALESCE(retry_count, 0) AS retry_count
+                      COALESCE(retry_count, 0) AS retry_count,
+                      inference_alive
                FROM device_status WHERE device_cluster = ? AND device_id = ?""",
             (device_cluster, device_id),
         ).fetchone()
@@ -255,14 +260,10 @@ def record_deployment(
     device_id: str,
     device_type: str,
     image: str,
-    sidecar_host_ip: str,
-    sidecar_host_port: int,
     host_port: int | None = None,
     container_port: int | None = None,
-    managing_daemon_id: str | None = None,
     container_hash: str | None = None,
     container_name: str | None = None,
-    sidecar_name: str | None = None,
     status: str = "running",
 ) -> None:
     """Record a successful deployment for a device."""
@@ -272,21 +273,16 @@ def record_deployment(
             """
             INSERT INTO deployments (
                 device_cluster, device_id, device_type, image, host_port, container_port,
-                managing_daemon_id, container_hash, container_name, sidecar_name,
-                sidecar_host_ip, sidecar_host_port, status, deployed_at
+                container_hash, container_name, status, deployed_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(device_cluster, device_id) DO UPDATE SET
                 device_type = excluded.device_type,
                 image = excluded.image,
                 host_port = excluded.host_port,
                 container_port = excluded.container_port,
-                managing_daemon_id = excluded.managing_daemon_id,
                 container_hash = excluded.container_hash,
                 container_name = excluded.container_name,
-                sidecar_name = excluded.sidecar_name,
-                sidecar_host_ip = excluded.sidecar_host_ip,
-                sidecar_host_port = excluded.sidecar_host_port,
                 status = excluded.status,
                 deployed_at = CURRENT_TIMESTAMP
             """,
@@ -297,12 +293,8 @@ def record_deployment(
                 image,
                 host_port,
                 container_port,
-                managing_daemon_id,
                 container_hash,
                 container_name,
-                sidecar_name,
-                sidecar_host_ip,
-                sidecar_host_port,
                 status,
             ),
         )
@@ -333,8 +325,7 @@ def get_last_deployment(
     try:
         row = conn.execute(
             """SELECT device_cluster, device_id, device_type, image, host_port, container_port,
-                      managing_daemon_id, container_hash, container_name, sidecar_name,
-                      sidecar_host_ip, sidecar_host_port, status, deployed_at
+                      container_hash, container_name, status, deployed_at
                FROM deployments WHERE device_cluster = ? AND device_id = ?
                ORDER BY deployed_at DESC LIMIT 1""",
             (device_cluster, device_id),
@@ -345,11 +336,12 @@ def get_last_deployment(
 
 
 def get_cluster_status(device_cluster: str) -> list:
-    """Return (device_id, last_heartbeat) rows for each device in the cluster."""
+    """Return (device_id, last_heartbeat, inference_alive) rows for each device in the cluster."""
     conn = get_connection()
     try:
         return conn.execute(
-            "SELECT device_id, last_heartbeat FROM device_status WHERE device_cluster = ?",
+            """SELECT device_id, last_heartbeat, inference_alive
+               FROM device_status WHERE device_cluster = ?""",
             (device_cluster,),
         ).fetchall()
     finally:
@@ -362,8 +354,7 @@ def get_cluster_deployments(device_cluster: str) -> dict[str, dict]:
     try:
         rows = conn.execute(
             """SELECT device_cluster, device_id, device_type, image, host_port, container_port,
-                      managing_daemon_id, container_hash, container_name, sidecar_name,
-                      sidecar_host_ip, sidecar_host_port, status, deployed_at
+                      container_hash, container_name, status, deployed_at
                FROM deployments WHERE device_cluster = ?
                ORDER BY device_id""",
             (device_cluster,),
@@ -397,3 +388,136 @@ def update_device_status(
 ) -> None:
     """Convenience wrapper to update device status (same as update_heartbeat)."""
     update_heartbeat(device_cluster, device_id, current_model, status)
+
+
+def update_sidecar_heartbeat(
+    device_cluster: str,
+    device_id: str,
+    sidecar_host_ip: str,
+    sidecar_host_port: int,
+    dg_total: int,
+    inference_alive: bool | None = None,
+) -> tuple[str, tuple[str, int] | None]:
+    """Apply a sidecar heartbeat to device_status.
+
+    Diffs dg_total against the prior heartbeat to derive data_flow_state
+    ("flowing" if grew, "idle" if equal, "unknown" if no prior). Marks status
+    Active and refreshes last_heartbeat.
+
+    Returns (data_flow_state, prior_endpoint) where prior_endpoint is the
+    (ip, port) tuple stored before this call, or None if there was no prior
+    endpoint. The caller can compare prior_endpoint to the new values to
+    detect endpoint churn and trigger a target re-push.
+    """
+    conn = get_connection()
+    try:
+        prior_row = conn.execute(
+            """SELECT sidecar_host_ip, sidecar_host_port, dg_total
+               FROM device_status WHERE device_cluster = ? AND device_id = ?""",
+            (device_cluster, device_id),
+        ).fetchone()
+
+        prior_endpoint: tuple[str, int] | None = None
+        if prior_row is not None:
+            prior_ip = prior_row["sidecar_host_ip"]
+            prior_port = prior_row["sidecar_host_port"]
+            if prior_ip is not None and prior_port is not None:
+                prior_endpoint = (prior_ip, prior_port)
+
+        prior_dg = prior_row["dg_total"] if prior_row is not None else None
+        if prior_dg is None:
+            data_flow_state = "unknown"
+        elif dg_total > prior_dg:
+            data_flow_state = "flowing"
+        else:
+            data_flow_state = "idle"
+
+        active = HeartbeatStatus.ACTIVE.value
+        alive_int = None if inference_alive is None else (1 if inference_alive else 0)
+        conn.execute(
+            """
+            INSERT INTO device_status (
+                device_cluster, device_id, status, last_heartbeat,
+                sidecar_host_ip, sidecar_host_port, dg_total, data_flow_state,
+                inference_alive
+            )
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
+            ON CONFLICT(device_cluster, device_id) DO UPDATE SET
+                status = excluded.status,
+                last_heartbeat = CURRENT_TIMESTAMP,
+                sidecar_host_ip = excluded.sidecar_host_ip,
+                sidecar_host_port = excluded.sidecar_host_port,
+                dg_total = excluded.dg_total,
+                data_flow_state = excluded.data_flow_state,
+                inference_alive = COALESCE(excluded.inference_alive, inference_alive)
+            """,
+            (
+                device_cluster,
+                device_id,
+                active,
+                sidecar_host_ip,
+                sidecar_host_port,
+                dg_total,
+                data_flow_state,
+                alive_int,
+            ),
+        )
+        conn.commit()
+        return data_flow_state, prior_endpoint
+    finally:
+        conn.close()
+
+
+def bootstrap_sidecar_endpoint(
+    device_cluster: str,
+    device_id: str,
+    sidecar_host_ip: str,
+    sidecar_host_port: int,
+) -> None:
+    """Seed device_status.sidecar_host_ip/port at deploy time.
+
+    Lets the first edge dial succeed without waiting for the sidecar's first
+    heartbeat. Leaves dg_total, data_flow_state, status, and last_heartbeat
+    untouched on existing rows so a running device's counters survive a
+    re-deploy.
+    """
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO device_status (
+                device_cluster, device_id, sidecar_host_ip, sidecar_host_port
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(device_cluster, device_id) DO UPDATE SET
+                sidecar_host_ip = excluded.sidecar_host_ip,
+                sidecar_host_port = excluded.sidecar_host_port
+            """,
+            (device_cluster, device_id, sidecar_host_ip, sidecar_host_port),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_sidecar_endpoint(
+    device_cluster: str,
+    device_id: str,
+) -> tuple[str, int] | None:
+    """Return (ip, port) for the device's sidecar, or None if not populated."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT sidecar_host_ip, sidecar_host_port
+               FROM device_status WHERE device_cluster = ? AND device_id = ?""",
+            (device_cluster, device_id),
+        ).fetchone()
+        if not row:
+            return None
+        ip = row["sidecar_host_ip"]
+        port = row["sidecar_host_port"]
+        if ip is None or port is None:
+            return None
+        return (ip, port)
+    finally:
+        conn.close()

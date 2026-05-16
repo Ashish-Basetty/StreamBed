@@ -5,7 +5,6 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-import httpx
 import numpy as np
 import uvicorn
 from fastapi import FastAPI
@@ -16,10 +15,7 @@ from edge_config import (
     API_HOST,
     API_PORT,
     CLEANUP_INTERVAL,
-    CONTROLLER_URL,
-    DEVICE_CLUSTER,
     DEVICE_ID,
-    HEARTBEAT_INTERVAL,
     MODEL_DEVICE,
     STORAGE_DIR,
     STREAM_PROXY_HOST,
@@ -110,26 +106,6 @@ async def ttl_cleanup_loop():
         await asyncio.sleep(CLEANUP_INTERVAL)
 
 
-async def heartbeat_loop():
-    """Send status heartbeats to the controller."""
-    while True:
-        if CONTROLLER_URL and CONTROLLER_URL.strip():
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    await client.post(
-                        f"{CONTROLLER_URL.rstrip('/')}/heartbeat",
-                        json={
-                            "device_cluster": DEVICE_CLUSTER,
-                            "device_id": DEVICE_ID,
-                            "current_model_version": model.get_model_version(),
-                            "status": "Active",
-                        },
-                    )
-            except Exception as e:
-                print(f"[Edge] heartbeat failed: {e}")
-        await asyncio.sleep(HEARTBEAT_INTERVAL)
-
-
 CONNECT_RETRY_INTERVAL = 5
 async def _connect_to_proxy_with_retry() -> None:
     """Retry connecting to stream proxy until success. Spins if host is unset or unreachable."""
@@ -153,7 +129,6 @@ async def lifespan(app: FastAPI):
     print("[Edge] Model loaded.")
 
     cleanup_task = asyncio.create_task(ttl_cleanup_loop())
-    heartbeat_task = asyncio.create_task(heartbeat_loop())
 
     await _connect_to_proxy_with_retry()
     capture_task = asyncio.create_task(video_capture_loop())
@@ -162,7 +137,6 @@ async def lifespan(app: FastAPI):
 
     capture_task.cancel()
     cleanup_task.cancel()
-    heartbeat_task.cancel()
     await sender.close()
 
 

@@ -37,7 +37,6 @@ class TestDeploymentDocker:
             deployment = deployments[device_id]
             assert deployment["container_name"] == result["container_name"]
             assert deployment["container_hash"] == result["container_hash"]
-            assert deployment["sidecar_name"] == result["sidecar_name"]
             assert deployment["status"] == "running"
 
     def test_delete(self, deployment_stack):

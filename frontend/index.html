@@ -69,6 +69,21 @@
     .badge-failure      { background: #fff3cd; color: #856404; }
     .badge-unknown      { background: #e2e3e5; color: #383d41; }
 
+    /* Sidecar data-flow indicator: green when datagrams advanced since the
+       last heartbeat, amber when sidecar is alive but data plane is idle. */
+    .flow-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      margin-left: 6px;
+      border-radius: 10px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      vertical-align: middle;
+    }
+    .flow-flowing { background: #d4edda; color: #155724; }
+    .flow-idle    { background: #fff3cd; color: #856404; }
+    .flow-unknown { background: #e2e3e5; color: #383d41; }
+
 .btn {
       padding: 8px 18px;
       border: none;
@@ -382,6 +397,12 @@
                         data-tip="No model deployed. Time = last heartbeat (local)."
                         x-text="'No Model Deployed: ' + fmtTime(srv.device.last_heartbeat)"></span>
                 </template>
+                <template x-if="srv.device.data_flow_state">
+                  <span class="flow-pill tip"
+                        :class="flowClass(srv.device.data_flow_state)"
+                        data-tip="Sidecar data plane: flowing = datagrams advanced since last heartbeat"
+                        x-text="flowLabel(srv.device.data_flow_state)"></span>
+                </template>
               </div>
               <div class="meta">
                 <template x-if="hasModel(srv.device) && hasRunningModel(srv.device)">
@@ -422,6 +443,12 @@
                       <span class="badge badge-no-model tip"
                             data-tip="No model deployed. Time = last heartbeat (local)."
                             x-text="'No Model Deployed: ' + fmtTime(e.last_heartbeat)"></span>
+                    </template>
+                    <template x-if="e.data_flow_state">
+                      <span class="flow-pill tip"
+                            :class="flowClass(e.data_flow_state)"
+                            data-tip="Sidecar data plane: flowing = datagrams advanced since last heartbeat"
+                            x-text="flowLabel(e.data_flow_state)"></span>
                     </template>
                   </div>
                   <div class="meta">
@@ -468,6 +495,12 @@
                       <span class="badge badge-no-model tip"
                             data-tip="No model deployed. Time = last heartbeat (local)."
                             x-text="'No Model Deployed: ' + fmtTime(e.last_heartbeat)"></span>
+                    </template>
+                    <template x-if="e.data_flow_state">
+                      <span class="flow-pill tip"
+                            :class="flowClass(e.data_flow_state)"
+                            data-tip="Sidecar data plane: flowing = datagrams advanced since last heartbeat"
+                            x-text="flowLabel(e.data_flow_state)"></span>
                     </template>
                   </div>
                   <div class="meta">

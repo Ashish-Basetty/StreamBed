@@ -38,7 +38,6 @@ from experiments.advisor.bench.train_shared_head import SmallHead
 
 # StreamBed shared interfaces — sender/receiver implementations we reuse
 # unchanged (no new code in StreamBed's protocol layer).
-from shared.heartbeat import heartbeat_loop
 from shared.interfaces.stream_interface import (
     StreamBedUDPDuplex,
     StreamFrame,
@@ -333,7 +332,6 @@ def load_inference(args: argparse.Namespace) -> EdgeInference:
 async def serve(args: argparse.Namespace, inference: EdgeInference) -> None:
     duplex: StreamBedUDPDuplex | None = None
     advice_task: asyncio.Task | None = None
-    heartbeat_task = asyncio.create_task(heartbeat_loop(model_version="advisor-edge"))
 
     advisor_disabled = (args.advisor_host or "").lower() == "none"
     if advisor_disabled:
@@ -364,11 +362,6 @@ async def serve(args: argparse.Namespace, inference: EdgeInference) -> None:
                 await advice_task
             except (asyncio.CancelledError, Exception):
                 pass
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except (asyncio.CancelledError, Exception):
-            pass
         if duplex is not None:
             await duplex.close()
 

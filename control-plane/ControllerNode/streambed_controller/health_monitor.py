@@ -25,6 +25,7 @@ from .db import (
     get_device_address,
     get_device_status,
     get_last_deployment,
+    get_sidecar_endpoint,
     set_device_status_evaluated,
 )
 from .deploy import DeployError, delete_container_from_device, deploy_to_device
@@ -186,7 +187,16 @@ class HealthMonitor:
             return False
 
     async def _evaluate_cluster(self, cluster: str):
-        """Evaluate current health state of all devices."""
+        """Evaluate current health state of all devices.
+
+        Heartbeat presence comes from the sidecar — it tells us the sidecar
+        process is alive and the data-plane port is published. To detect
+        inference-container death without conflating it with "no upstream
+        traffic" we ALSO look at `inference_alive`, which the sidecar
+        piggybacks from the daemon's `docker inspect`. Restart triggers on
+        either UNRESPONSIVE (sidecar gone) or ACTIVE+inference_alive=false
+        (sidecar fine, inference container exited).
+        """
 
         now = datetime.utcnow()
 
@@ -195,7 +205,10 @@ class HealthMonitor:
         expected = get_cluster_deployments(cluster)
         rows = get_cluster_status(cluster)
 
-        for device_id, last_heartbeat in rows:
+        for row in rows:
+            device_id = row["device_id"]
+            last_heartbeat = row["last_heartbeat"]
+            inference_alive = row["inference_alive"]
 
             if not last_heartbeat:
                 states[device_id] = "UNKNOWN"
@@ -212,8 +225,12 @@ class HealthMonitor:
                     states[device_id] = "UNRESPONSIVE"
                     set_device_status_evaluated(cluster, device_id, HeartbeatStatus.UNRESPONSIVE, increment=True)
 
-            # If the device is in the expected deployments and is unresponsive, attempt restart.
-            if device_id in expected and states[device_id] not in {"ACTIVE", "UNKNOWN"}:
+            inference_dead = inference_alive == 0
+            needs_restart = device_id in expected and (
+                states[device_id] not in {"ACTIVE", "UNKNOWN"}
+                or (states[device_id] == "ACTIVE" and inference_dead)
+            )
+            if needs_restart:
                 asyncio.create_task(asyncio.to_thread(self._attempt_restart, cluster, device_id))
 
 
@@ -325,19 +342,13 @@ class HealthMonitor:
     ) -> tuple[str, int] | None:
         """Return the (host_ip, host_port) an edge sidecar should dial for its server peer.
 
-        Source of truth: the `deployments` row written when the controller
-        forwarded `/deploy` to the server's daemon. If the server has no
-        deployment yet (no model loaded), return None so callers can skip
-        the push rather than route to a stale fallback.
+        Source of truth: the `device_status` row populated by the server
+        sidecar's heartbeat (or seeded at deploy time by
+        `bootstrap_sidecar_endpoint`). Returns None if the endpoint hasn't
+        been populated yet so callers skip the push rather than route to a
+        stale fallback.
         """
-        deployment = get_last_deployment(cluster, target_server)
-        if not deployment:
-            return None
-        ip = deployment.get("sidecar_host_ip")
-        port = deployment.get("sidecar_host_port")
-        if not ip or not isinstance(port, int):
-            return None
-        return (ip, port)
+        return get_sidecar_endpoint(cluster, target_server)
 
     async def _update_edge_target(
         self,

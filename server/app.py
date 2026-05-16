@@ -1,40 +1,34 @@
 import asyncio
 import json
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-import httpx
 import uvicorn
-from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 sys.path.insert(0, "/app")
 
-from shared.storage.frame_store import FrameStore
-from shared.storage.ttl_manager import TTLManager
-from shared.api.retrieval import create_retrieval_router
-from shared.interfaces.stream_interface import StreamBedUDPServerReceiver
 from server_config import (
     API_HOST,
     API_PORT,
     CLEANUP_INTERVAL,
-    CONTROLLER_URL,
-    DEVICE_CLUSTER,
-    DEVICE_ID,
-    HEARTBEAT_INTERVAL,
     STORAGE_DIR,
     STREAM_LISTEN_HOST,
     STREAM_LISTEN_PORT,
     TTL_MAX,
     TTL_MIN,
 )
+from shared.api.retrieval import create_retrieval_router
+from shared.interfaces.stream_interface import StreamBedUDPServerReceiver
+from shared.storage.frame_store import FrameStore
+from shared.storage.ttl_manager import TTLManager
 
 # Server is now a passive sink: no inference, just stores whatever halves
 # arrive (frame from CHNK, embedding from EMBD) and merges them by
 # (source_device_id, timestamp). The edge runs the model; the server records.
 # When inference comes back to the server later, it reads from this same
 # store rather than running on the receive path.
-PASSTHROUGH_MODEL_VERSION = "passthrough"
 
 store = FrameStore(base_dir=STORAGE_DIR)
 ttl_mgr = TTLManager(storage_path=STORAGE_DIR, max_ttl=TTL_MAX, min_ttl=TTL_MIN)
@@ -89,28 +83,6 @@ async def ttl_cleanup_loop():
         await asyncio.sleep(CLEANUP_INTERVAL)
 
 
-async def heartbeat_loop():
-    """Send status heartbeats to the controller. No model runs here, so
-    `current_model_version` is the passthrough sentinel; the actual edge
-    model_version is stored per-row instead."""
-    while True:
-        if CONTROLLER_URL and CONTROLLER_URL.strip():
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    await client.post(
-                        f"{CONTROLLER_URL.rstrip('/')}/heartbeat",
-                        json={
-                            "device_cluster": DEVICE_CLUSTER,
-                            "device_id": DEVICE_ID,
-                            "current_model_version": PASSTHROUGH_MODEL_VERSION,
-                            "status": "Active",
-                        },
-                    )
-            except Exception as e:
-                print(f"[Server] heartbeat failed: {e}")
-        await asyncio.sleep(HEARTBEAT_INTERVAL)
-
-
 async def stream_target_poll_loop():
     """Poll the stream target config file from the daemon for informational purposes."""
     stream_target_path = Path("/config/stream-target.json")
@@ -140,14 +112,12 @@ async def lifespan(app: FastAPI):
 
     receive_task = asyncio.create_task(stream_receive_loop())
     cleanup_task = asyncio.create_task(ttl_cleanup_loop())
-    heartbeat_task = asyncio.create_task(heartbeat_loop())
     stream_target_task = asyncio.create_task(stream_target_poll_loop())
 
     yield
 
     receive_task.cancel()
     cleanup_task.cancel()
-    heartbeat_task.cancel()
     stream_target_task.cancel()
     await receiver.stop()
 

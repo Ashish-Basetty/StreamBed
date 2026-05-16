@@ -6,6 +6,7 @@ import time
 import httpx
 
 from .db import (
+    bootstrap_sidecar_endpoint,
     delete_deployment,
     get_connection,
     get_device_address,
@@ -80,15 +81,18 @@ def deploy_to_device(
                             device_id,
                             device_type,
                             image,
-                            sidecar_host_ip=sidecar_host_ip,
-                            sidecar_host_port=sidecar_host_port,
                             host_port=host_port,
                             container_port=container_port,
-                            managing_daemon_id=device_id,
                             container_hash=data.get("container_hash"),
                             container_name=data.get("container_name"),
-                            sidecar_name=data.get("sidecar_name"),
                             status="running",
+                        )
+                        # Bootstrap the sidecar endpoint into device_status so
+                        # routing pushes work before the sidecar's first
+                        # heartbeat arrives. The sidecar heartbeat is
+                        # authoritative thereafter.
+                        bootstrap_sidecar_endpoint(
+                            device_cluster, device_id, sidecar_host_ip, sidecar_host_port
                         )
                     except Exception as e:
                         raise DeployError(f"Deploy succeeded but failed to record: {e}") from e
@@ -131,11 +135,8 @@ def delete_container_from_device(
     url = f"http://{ip}:{port}/delete"
     deployment = get_last_deployment(device_cluster, device_id)
     payload: dict = {}
-    if deployment:
-        if deployment.get("container_name"):
-            payload["container_name"] = deployment["container_name"]
-        if deployment.get("sidecar_name"):
-            payload["sidecar_name"] = deployment["sidecar_name"]
+    if deployment and deployment.get("container_name"):
+        payload["container_name"] = deployment["container_name"]
     last_error: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:

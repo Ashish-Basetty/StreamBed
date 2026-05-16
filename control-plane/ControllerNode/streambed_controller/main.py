@@ -16,8 +16,15 @@ from .db import (
     init_db,
     register_device,
     update_heartbeat,
+    update_sidecar_heartbeat,
 )
-from .deploy import DeployError, DeviceNotFoundError, delete_container_from_device, deploy_to_device
+from .deploy import (
+    DeployError,
+    DeviceNotFoundError,
+    _push_target_to_routed_edges,
+    delete_container_from_device,
+    deploy_to_device,
+)
 from .health_monitor import HealthMonitor, create_and_start_monitor
 from .routing import assign_edge_to_least_loaded_server, assign_unrouted_edges
 
@@ -79,6 +86,19 @@ class HeartbeatRequest(BaseModel):
     device_id: str
     current_model_version: str | None = None
     status: HeartbeatStatus | str | None = None
+
+
+class SidecarHeartbeatRequest(BaseModel):
+    device_cluster: str
+    device_id: str
+    role: str  # "edge" | "server"
+    sidecar_host_ip: str
+    sidecar_host_port: int
+    dg_total: int  # cumulative datagrams seen (sent + recv)
+    # Inference container running state, piggybacked by the sidecar from
+    # the daemon's /inference-status. Used by the health monitor to
+    # restart-on-death without confusing it with restart-on-idle.
+    inference_alive: bool = True
 
 
 class RegisterRequest(BaseModel):
@@ -214,6 +234,31 @@ def receive_heartbeat(body: HeartbeatRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+@app.post("/sidecar-heartbeat")
+def receive_sidecar_heartbeat(body: SidecarHeartbeatRequest) -> dict:
+    """Heartbeat from the sidecar: endpoint + cumulative datagram count.
+
+    Endpoint and dg_total are persisted on `device_status`. If the endpoint
+    changed since the prior heartbeat, push the new target to every edge
+    routed at this device so streaming resumes without waiting for the
+    bulk sync tick.
+    """
+    data_flow_state, prior_endpoint = update_sidecar_heartbeat(
+        body.device_cluster,
+        body.device_id,
+        body.sidecar_host_ip,
+        body.sidecar_host_port,
+        body.dg_total,
+        inference_alive=body.inference_alive,
+    )
+    new_endpoint = (body.sidecar_host_ip, body.sidecar_host_port)
+    if body.role == "server" and prior_endpoint != new_endpoint:
+        _push_target_to_routed_edges(
+            body.device_cluster, body.device_id, body.sidecar_host_ip, body.sidecar_host_port
+        )
+    return {"ok": True, "data_flow_state": data_flow_state}
+
+
 @app.get("/routing")
 def list_routing(device_cluster: str | None = None) -> dict:
     """List all routing table entries, optionally filtered by source cluster."""
@@ -263,13 +308,18 @@ def list_status(device_cluster: str | None = None) -> dict:
     try:
         if device_cluster:
             rows = conn.execute(
-                """SELECT device_cluster, device_id, current_model, status, last_heartbeat
+                """SELECT device_cluster, device_id, current_model, status, last_heartbeat,
+                          sidecar_host_ip, sidecar_host_port, dg_total, data_flow_state,
+                          inference_alive
                    FROM device_status WHERE device_cluster = ?""",
                 (device_cluster,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT device_cluster, device_id, current_model, status, last_heartbeat FROM device_status"
+                """SELECT device_cluster, device_id, current_model, status, last_heartbeat,
+                          sidecar_host_ip, sidecar_host_port, dg_total, data_flow_state,
+                          inference_alive
+                   FROM device_status"""
             ).fetchall()
         return {"status": [dict(row) for row in rows]}
     finally:
@@ -283,16 +333,14 @@ def list_deployments(device_cluster: str | None = None) -> dict:
         if device_cluster:
             rows = conn.execute(
                 """SELECT device_cluster, device_id, device_type, image, host_port, container_port,
-                          managing_daemon_id, container_hash, container_name, sidecar_name,
-                          sidecar_host_ip, sidecar_host_port, status, deployed_at
+                          container_hash, container_name, status, deployed_at
                    FROM deployments WHERE device_cluster = ?""",
                 (device_cluster,),
             ).fetchall()
         else:
             rows = conn.execute(
                 """SELECT device_cluster, device_id, device_type, image, host_port, container_port,
-                          managing_daemon_id, container_hash, container_name, sidecar_name,
-                          sidecar_host_ip, sidecar_host_port, status, deployed_at
+                          container_hash, container_name, status, deployed_at
                    FROM deployments"""
             ).fetchall()
         return {"deployments": [dict(row) for row in rows]}

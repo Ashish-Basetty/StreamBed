@@ -31,6 +31,9 @@ def spawn_sidecar(
     local_udp_bind: str,
     quic_bind: str,
     host_udp_port: int,
+    controller_url: str,
+    sidecar_host_ip: str,
+    heartbeat_interval: str = "10s",
 ) -> str | None:
     """Launch the sidecar container. Idempotent: removes any existing one first.
 
@@ -67,6 +70,12 @@ def spawn_sidecar(
         "DEVICE_CLUSTER": cluster,
         "DAEMON_URL": daemon_url,
         "PEER_QUIC_PORT": str(peer_quic_port),
+        # Controller heartbeat: sidecar posts liveness + endpoint + counters
+        # to CONTROLLER_URL/sidecar-heartbeat every HEARTBEAT_INTERVAL.
+        "CONTROLLER_URL": controller_url,
+        "SIDECAR_HOST_IP": sidecar_host_ip,
+        "SIDECAR_HOST_PORT": str(host_udp_port),
+        "HEARTBEAT_INTERVAL": heartbeat_interval,
     }
 
     run_kwargs: dict = {

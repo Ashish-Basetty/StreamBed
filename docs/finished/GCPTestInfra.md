@@ -147,4 +147,3 @@ Burst-only, 5 VMs ×  ~5 hours of testing × 4 sessions/week:
 - **Total: ~$7/month.** $50 covers ~7 months of casual testing.
 
 If you forget to stop and leave them running for a weekend (~60h × 5 VMs × $0.012 avg ≈ $3.60), no big deal. The danger is a *month* of forgotten always-on, which would burn ~$42. The budget alert at 50% will email you before that happens.
-

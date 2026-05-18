@@ -17,9 +17,9 @@ from edge_config import (
     CLEANUP_INTERVAL,
     DEVICE_ID,
     MODEL_DEVICE,
+    SIDECAR_HOST,
+    SIDECAR_UDP_PORT,
     STORAGE_DIR,
-    STREAM_PROXY_HOST,
-    STREAM_PROXY_PORT,
     TTL_MAX,
     TTL_MIN,
     VIDEO_SERVER_HOST,
@@ -108,17 +108,17 @@ async def ttl_cleanup_loop():
 
 CONNECT_RETRY_INTERVAL = 5
 async def _connect_to_proxy_with_retry() -> None:
-    """Retry connecting to stream proxy until success. Spins if host is unset or unreachable."""
+    """Retry connecting to the sidecar until success. Spins if host is unset or unreachable."""
     while True:
-        if not (STREAM_PROXY_HOST and STREAM_PROXY_HOST.strip()):
-            print("[Edge] STREAM_PROXY_HOST not set, waiting...")
+        if not (SIDECAR_HOST and SIDECAR_HOST.strip()):
+            print("[Edge] SIDECAR_HOST not set, waiting...")
             await asyncio.sleep(CONNECT_RETRY_INTERVAL)
             continue
         try:
-            await sender.connect(STREAM_PROXY_HOST, STREAM_PROXY_PORT)
+            await sender.connect(SIDECAR_HOST, SIDECAR_UDP_PORT)
             return
         except Exception as e:
-            print(f"[Edge] Cannot connect to {STREAM_PROXY_HOST}:{STREAM_PROXY_PORT}: {e}, retrying in {CONNECT_RETRY_INTERVAL}s...")
+            print(f"[Edge] Cannot connect to {SIDECAR_HOST}:{SIDECAR_UDP_PORT}: {e}, retrying in {CONNECT_RETRY_INTERVAL}s...")
             await asyncio.sleep(CONNECT_RETRY_INTERVAL)
 
 

@@ -100,3 +100,21 @@ def _docker_host_address() -> str:
     except Exception:
         pass
     return "172.17.0.1"
+
+
+if __name__ == "__main__":
+    # Standalone runner so the server can be brought up as a Docker
+    # service (used by the GCP test compose: see infra/gcp/docker-compose.controller.yml).
+    import argparse
+    import signal
+
+    parser = argparse.ArgumentParser(description="Mock video server")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=9200)
+    parser.add_argument("--fps", type=float, default=30.0)
+    args = parser.parse_args()
+
+    server = MockVideoServer(host=args.host, port=args.port, fps=args.fps)
+    server.start()
+    print(f"mock_video_server listening on {args.host}:{args.port} @ {args.fps} fps", flush=True)
+    signal.pause()

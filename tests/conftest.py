@@ -30,18 +30,39 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Leave Docker Compose services and runtime containers up after tests "
         "(skip down, reap, and related fixture teardown).",
     )
+    parser.addoption(
+        "--controller-url",
+        action="store",
+        default="http://localhost:18080",
+        help="Base URL of the controller to test against. Default points at the "
+        "GCP IAP tunnel port (18080) so it doesn't collide with the local "
+        "docker-compose controller on :8080. Local tests hardcode :8080 and "
+        "ignore this option; only GCP tests read it.",
+    )
 
 
 @pytest.fixture(scope="session")
 def keep_docker(request: pytest.FixtureRequest) -> bool:
     return bool(request.config.getoption("--keep-docker"))
+
+
+@pytest.fixture(scope="session")
+def controller_url(request: pytest.FixtureRequest) -> str:
+    return str(request.config.getoption("--controller-url")).rstrip("/")
+
+
+@pytest.fixture(scope="session")
+def is_remote_controller(controller_url: str) -> bool:
+    """True when tests target a controller not managed by the local compose fixture."""
+    return "localhost" not in controller_url and "127.0.0.1" not in controller_url
 _TEST_FAILURE_LOGS_DIR = _PROJECT_ROOT / "tests" / "logs"
-# Docker mounts ./controller/data:/app/data, so DB is at controller/data/controller.db
-# Local runs use controller/ControllerNode/data/controller.db
-_CONTROLLER_DB_PATH = _PROJECT_ROOT / "controller" / "data" / "controller.db"
+# Docker mounts ./control-plane/data:/app/data (docker-compose.yml), so the
+# DB lands at control-plane/data/controller.db. Local (non-docker) runs of
+# the controller put it under control-plane/ControllerNode/data/.
+_CONTROLLER_DB_PATH = _PROJECT_ROOT / "control-plane" / "data" / "controller.db"
 _CONTROLLER_DB_PATHS = [
     _CONTROLLER_DB_PATH,
-    _PROJECT_ROOT / "controller" / "ControllerNode" / "data" / "controller.db",
+    _PROJECT_ROOT / "control-plane" / "ControllerNode" / "data" / "controller.db",
 ]
 
 _ALL_DEVICE_IDS = ["server-001", "server-002", "edge-001", "edge-002", "edge-003"]

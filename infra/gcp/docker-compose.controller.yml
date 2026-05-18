@@ -1,0 +1,52 @@
+# Runs on controller-01 (GCP). Brings up the controller and router only;
+# daemons run one-per-VM via docker-compose.worker.yml on each worker.
+#
+# Images are pulled from Docker Hub (no build context on the VM). Push from
+# your laptop before deploy:
+#   docker buildx build --platform linux/amd64 -t ashishbasetty/streambed-controller:latest \
+#     -f control-plane/ControllerNode/Dockerfile --push .
+#   docker buildx build --platform linux/amd64 -t ashishbasetty/streambed-router:latest \
+#     -f control-plane/Router/Dockerfile --push .
+#
+# Usage on the VM:
+#   sudo docker compose -f docker-compose.controller.yml up -d
+#
+# Stop:
+#   sudo docker compose -f docker-compose.controller.yml down
+
+services:
+  controller:
+    image: ashishbasetty/streambed-controller:latest
+    container_name: streambed-controller
+    restart: unless-stopped
+    # host network: controller binds 0.0.0.0:8080 on the VM. Other VMs on the
+    # VPC reach it via the internal IP; the GCP firewall (allow_internal) gates
+    # who can connect. Avoids docker-proxy + port-publishing overhead.
+    network_mode: host
+    volumes:
+      - ./controller-data:/app/data
+    environment:
+      - HEARTBEAT_TIMEOUT_SECS=30
+
+  router:
+    image: ashishbasetty/streambed-router:latest
+    container_name: streambed-router
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./router-data:/app/data
+    environment:
+      - ROUTER_ADMIN_TOKEN=${ROUTER_ADMIN_TOKEN:-dev-token}
+    depends_on:
+      - controller
+
+  # Single source of TCP video frames for the GCP edge containers.
+  # Dedicated minimal image (python:3.12-slim + numpy + shared/) so the
+  # daemon image doesn't need to carry numpy. Binds on the VM's internal IP
+  # via host network; allow_internal opens VPC TCP/UDP so workers reach it
+  # at <controller-internal-ip>:9200.
+  mock-video:
+    image: ashishbasetty/streambed-mock-video:latest
+    container_name: streambed-mock-video
+    restart: unless-stopped
+    network_mode: host

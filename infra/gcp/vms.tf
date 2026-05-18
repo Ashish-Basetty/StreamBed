@@ -58,9 +58,14 @@ resource "google_compute_instance" "workers" {
     }
   }
 
-  # Internal-only — no access_config block.
   network_interface {
     subnetwork = google_compute_subnetwork.subnet.id
+    # Ephemeral external IP. Required for `apt-get update` against
+    # us-central1.gce.archive.ubuntu.com — PGA on the subnet does NOT cover
+    # the apt mirror in practice (only googleapis.com domains). Workers
+    # remain firewalled from the public internet on ingress; this only
+    # enables egress NAT.
+    access_config {}
   }
 
   metadata = {

@@ -1,0 +1,48 @@
+# Runs on a worker VM (server-0X or edge-0X). One daemon per VM.
+#
+# All per-VM config (DEVICE_ID, DAEMON_PUBLIC_IP, CONTROLLER_URL, port range,
+# bridge name) is stamped into /etc/default/streambed by startup.sh from GCE
+# metadata. This compose file is identical on every worker.
+#
+# Image must be pushed from your laptop first (linux/amd64 for GCP):
+#   docker buildx build --platform linux/amd64 -t ashishbasetty/streambed-daemon:latest \
+#     -f control-plane/DeploymentDaemon/Dockerfile --push .
+#
+# Usage on the VM:
+#   sudo docker compose -f docker-compose.worker.yml up -d
+
+services:
+  daemon:
+    image: ashishbasetty/streambed-daemon:latest
+    container_name: streambed-daemon
+    restart: unless-stopped
+    # Daemon API: bound on the VM internal IP via Docker port publish; the
+    # controller reaches it at DAEMON_PUBLIC_IP:9090. allow_internal firewall
+    # gates access to within the VPC.
+    ports:
+      - "9090:9090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./daemon-data:/app/data
+    env_file:
+      - /etc/default/streambed
+    environment:
+      # Host paths used by the daemon when it asks docker (via the mounted
+      # socket) to mount data into the inference container. Must be paths on
+      # the VM's filesystem, not inside the daemon container.
+      - STREAMBED_CONFIG_HOST_PATH=${PWD}/daemon-data
+      - STREAMBED_DATA_HOST_PATH=${PWD}/daemon-data/streambed
+      - STREAMBED_HOST_PORT=8000
+      - STREAMBED_CONTAINER_PORT=8000
+      - STREAMBED_MEMORY_LIMIT=2g
+      - SIDECAR_IMAGE=${SIDECAR_IMAGE:-ashishbasetty/streambed-quic-sidecar:latest}
+    networks:
+      - device-net
+
+networks:
+  # Must match DEVICE_NETWORK_NAME in /etc/default/streambed so the sidecar
+  # (spawned via the docker socket onto this same network) can resolve the
+  # daemon by container_name.
+  device-net:
+    name: streambed-device-net
+    driver: bridge

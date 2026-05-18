@@ -22,6 +22,12 @@ resource "google_compute_subnetwork" "subnet" {
   region        = var.region
   network       = google_compute_network.vpc.id
   ip_cidr_range = "10.10.0.0/24"
+
+  # Lets internal-only VMs (workers) reach Google-managed services without
+  # an external IP or Cloud NAT. Critical for the apt mirror at
+  # us-central1.gce.archive.ubuntu.com — without this, `apt-get update`
+  # times out on worker VMs.
+  private_ip_google_access = true
 }
 
 # --- Firewall rules ---
@@ -58,6 +64,22 @@ resource "google_compute_firewall" "allow_controller_http" {
   network = google_compute_network.vpc.name
 
   source_ranges = [var.your_home_ip_cidr]
+  target_tags   = ["controller"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8080"]
+  }
+}
+
+# Tests run from the laptop via `gcloud compute start-iap-tunnel ... 8080`.
+# IAP source range needs port 8080 explicitly allowed (the SSH rule only
+# covers port 22).
+resource "google_compute_firewall" "allow_iap_controller_http" {
+  name    = "streambed-allow-iap-controller-http"
+  network = google_compute_network.vpc.name
+
+  source_ranges = ["35.235.240.0/20"]
   target_tags   = ["controller"]
 
   allow {

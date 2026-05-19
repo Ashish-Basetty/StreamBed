@@ -1,0 +1,32 @@
+# StreamBed with time-varying UDP proxy for experiment harness.
+# The proxy sits on the EDGE device network so the edge sidecar can DNS-resolve
+# `varying-proxy`, and forwards to (target_host:target_port) from the mounted
+# target.yml — typically `host.docker.internal:<server-sidecar-host-port>`.
+# Run: docker compose -f docker-compose.yml -f docker-compose.varying.yml up -d
+
+version: "3.9"
+
+services:
+  varying-proxy:
+    build:
+      context: .
+      dockerfile: tests/varying_proxy/Dockerfile
+    container_name: streambed-varying-proxy
+    ports:
+      - "9010:9010/udp"
+    environment:
+      - BIND_HOST=0.0.0.0
+      - BIND_PORT=9010
+      - SCHEDULE_PATH=/etc/streambed/schedule.yml
+      - TARGET_PATH=/etc/streambed/target.yml
+      - POLL_INTERVAL=0.5
+    volumes:
+      - ./tests/experiments/runtime:/etc/streambed:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - streambed-device-edge-001-net
+
+networks:
+  streambed-device-edge-001-net:
+    name: streambed-device-edge-001-net

@@ -1,0 +1,4 @@
+# Canonical advisor cadence schedule: full → light → very light.
+- {at_s: 0,  reply_every_n: 1}
+- {at_s: 45, reply_every_n: 5}
+- {at_s: 90, reply_every_n: 20}

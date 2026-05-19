@@ -29,6 +29,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import yaml
 from stable_baselines3 import PPO
 
 from shared.interfaces.stream_interface import StreamBedUDPServerDuplex
@@ -71,6 +72,40 @@ def encode_advice(timestamp: float, logits: np.ndarray) -> bytes:
     if logits.shape != (17,):
         raise ValueError(f"expected (17,) logits, got {logits.shape}")
     return struct.pack(">d", float(timestamp)) + logits.astype(np.float32).tobytes()
+
+
+async def _cadence_loop(args: argparse.Namespace, schedule_path: Path) -> None:
+    """Step args.reply_every_n through a YAML schedule by wall-clock.
+
+    Sleeping between transitions yields the event loop, so the reader at
+    `serve()`'s `async for sf in duplex.receive_stream()` picks up the new N
+    on the next iteration. CPython attribute assignment on a Namespace is
+    atomic — no lock needed.
+    """
+    try:
+        with schedule_path.open() as f:
+            raw = yaml.safe_load(f) or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("cadence: failed to load %s: %s", schedule_path, e)
+        return
+    segments = sorted(
+        ({"at_s": float(seg["at_s"]), "reply_every_n": int(seg["reply_every_n"])}
+         for seg in raw),
+        key=lambda s: s["at_s"],
+    )
+    if not segments:
+        log.warning("cadence: schedule %s is empty", schedule_path)
+        return
+    log.info("cadence: schedule loaded (%d steps)", len(segments))
+
+    started_at = time.monotonic()
+    for seg in segments:
+        wait = seg["at_s"] - (time.monotonic() - started_at)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        args.reply_every_n = seg["reply_every_n"]
+        log.info("cadence: t=%.1fs → reply_every_n=%d",
+                 time.monotonic() - started_at, args.reply_every_n)
 
 
 async def serve(args: argparse.Namespace, advisor: Advisor) -> None:
@@ -164,7 +199,19 @@ def main():
                    help="Reply with advice on every Nth EMBD received. "
                         "N=1 (default) replies to all. N=0 disables replies "
                         "(advisor becomes a sink — wire path still exercised).")
+    p.add_argument("--cadence-schedule", type=Path,
+                   default=Path(os.environ.get("CADENCE_SCHEDULE_PATH", "")) or None,
+                   help="YAML list of {at_s, reply_every_n} steps. When set, a "
+                        "background task overwrites --reply-every-n at each step "
+                        "based on wall-clock since process start.")
     args = p.parse_args()
+    # Auto-pickup: tests drop the schedule into /config/cadence.yml (the daemon
+    # mounts daemon-data/serverN/ as /config). Keeps the experiment harness
+    # working without modifying the /deploy endpoint to accept extra env.
+    if args.cadence_schedule is None:
+        fallback = Path("/config/cadence.yml")
+        if fallback.exists():
+            args.cadence_schedule = fallback
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -175,7 +222,12 @@ def main():
     advisor = Advisor(teacher)
     log.info("advisor ready")
 
-    asyncio.run(serve(args, advisor))
+    async def _entrypoint() -> None:
+        if args.cadence_schedule is not None:
+            asyncio.create_task(_cadence_loop(args, args.cadence_schedule))
+        await serve(args, advisor)
+
+    asyncio.run(_entrypoint())
 
 
 if __name__ == "__main__":

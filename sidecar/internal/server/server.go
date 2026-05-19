@@ -115,7 +115,7 @@ func Run(ctx context.Context, cfg Config) error {
 				}
 				mu.Unlock()
 			}()
-			handlePeer(ctx, qc, udpConn, &lastInfer, cfg.Metrics.DatagramBytesRecv.Load)
+			handlePeer(ctx, qc, udpConn, &lastInfer, cfg.Metrics.DatagramBytesRecv.Load, cfg.Metrics)
 		}(conn)
 	}
 }
@@ -126,10 +126,11 @@ func handlePeer(
 	udpConn *net.UDPConn,
 	lastInfer *atomic.Pointer[net.UDPAddr],
 	bytesRecv func() uint64,
+	m *metrics.Registry,
 ) {
 	errc := make(chan error, 3)
-	go func() { errc <- pumpDatagramsToUDP(ctx, conn, udpConn, lastInfer) }()
-	go func() { errc <- pumpControlToUDP(ctx, conn, udpConn, lastInfer) }()
+	go func() { errc <- pumpDatagramsToUDP(ctx, conn, udpConn, lastInfer, m) }()
+	go func() { errc <- pumpControlToUDP(ctx, conn, udpConn, lastInfer, m) }()
 	go func() { errc <- pumpFeedback(ctx, conn, bytesRecv) }()
 
 	select {
@@ -139,12 +140,13 @@ func handlePeer(
 	}
 }
 
-func pumpDatagramsToUDP(ctx context.Context, conn *quictransport.Conn, udp *net.UDPConn, lastInfer *atomic.Pointer[net.UDPAddr]) error {
+func pumpDatagramsToUDP(ctx context.Context, conn *quictransport.Conn, udp *net.UDPConn, lastInfer *atomic.Pointer[net.UDPAddr], m *metrics.Registry) error {
 	for {
 		p, err := conn.RecvDatagram(ctx)
 		if err != nil {
 			return err
 		}
+		m.IncBytesRecvByTag(p, len(p))
 		dst := lastInfer.Load()
 		if dst == nil {
 			continue
@@ -155,7 +157,7 @@ func pumpDatagramsToUDP(ctx context.Context, conn *quictransport.Conn, udp *net.
 	}
 }
 
-func pumpControlToUDP(ctx context.Context, conn *quictransport.Conn, udp *net.UDPConn, lastInfer *atomic.Pointer[net.UDPAddr]) error {
+func pumpControlToUDP(ctx context.Context, conn *quictransport.Conn, udp *net.UDPConn, lastInfer *atomic.Pointer[net.UDPAddr], m *metrics.Registry) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -164,6 +166,7 @@ func pumpControlToUDP(ctx context.Context, conn *quictransport.Conn, udp *net.UD
 		if err != nil {
 			return err
 		}
+		m.IncBytesRecvByTag(msg, len(msg))
 		dst := lastInfer.Load()
 		if dst == nil {
 			continue

@@ -51,8 +51,16 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.Metrics = metrics.New()
 	}
 
-	sentRate := bandwidth.NewSampling(cfg.Metrics.DatagramBytesSent.Load, bandwidth.SamplingConfig{})
-	remoteRate := bandwidth.NewRemote(500_000)
+	// Seed SentRate's initial estimate to match RemoteRate's default. Otherwise
+	// Composite's min() pins the policy to SamplingConfig.Min (10 kbps) for the
+	// first ~2 s, collapsing the bucket to ~1250 bytes and dropping every CHNK
+	// chunk after the first regardless of actual link capacity. EWMA pulls
+	// SentRate toward the true observed rate as samples arrive.
+	const initialBps = 500_000
+	sentRate := bandwidth.NewSampling(cfg.Metrics.DatagramBytesSent.Load, bandwidth.SamplingConfig{
+		InitialBps: initialBps,
+	})
+	remoteRate := bandwidth.NewRemote(initialBps)
 	estimator := bandwidth.NewComposite(sentRate, remoteRate)
 	if cfg.Policy == nil {
 		cfg.Policy = policy.NewRateLimit(estimator, 0)
@@ -110,7 +118,7 @@ func Run(ctx context.Context, cfg Config) error {
 		var lastAppAddr atomic.Pointer[net.UDPAddr]
 		errc := make(chan error, 2)
 		go func() { errc <- pumpUDPToQUIC(connCtx, udp, conn, cfg, &lastAppAddr) }()
-		go func() { errc <- pumpControlIntoBandwidth(connCtx, conn, remoteRate, udp, &lastAppAddr) }()
+		go func() { errc <- pumpControlIntoBandwidth(connCtx, conn, remoteRate, udp, &lastAppAddr, cfg.Metrics) }()
 
 		var newPeer string
 		select {
@@ -230,6 +238,7 @@ func pumpUDPToQUIC(ctx context.Context, udp *net.UDPConn, conn *quictransport.Co
 		if payload == nil {
 			continue
 		}
+		cfg.Metrics.IncBytesSentByTag(payload, len(payload))
 		var sendErr error
 		switch common.ClassifyPrefix(payload) {
 		case common.KindLossyData, common.KindLosslessData:
@@ -259,6 +268,7 @@ func pumpControlIntoBandwidth(
 	remote *bandwidth.RemoteBackend,
 	udp *net.UDPConn,
 	lastApp *atomic.Pointer[net.UDPAddr],
+	m *metrics.Registry,
 ) error {
 	for {
 		if ctx.Err() != nil {
@@ -271,6 +281,7 @@ func pumpControlIntoBandwidth(
 		if len(msg) < 4 {
 			continue
 		}
+		m.IncBytesRecvByTag(msg, len(msg))
 		var t [4]byte
 		copy(t[:], msg[:4])
 		switch t {

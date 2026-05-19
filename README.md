@@ -144,3 +144,6 @@ The fixtures live in [tests/gcp/conftest.py](tests/gcp/conftest.py) and
 deploys `server-01` + `edge-01` with mock-video wired in, yields, and tears
 down on exit. Mark the test `@pytest.mark.gcp` and depend on the
 `gcp_controller_reachable` fixture so it auto-skips when the tunnel is down.
+
+## License
+This project is licensed under the MIT License.

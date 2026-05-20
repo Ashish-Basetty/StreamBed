@@ -56,15 +56,37 @@ func Run(ctx context.Context, cfg Config) error {
 	// first ~2 s, collapsing the bucket to ~1250 bytes and dropping every CHNK
 	// chunk after the first regardless of actual link capacity. EWMA pulls
 	// SentRate toward the true observed rate as samples arrive.
-	const initialBps = 500_000
+	const initialBps = 20_000_000
 	sentRate := bandwidth.NewSampling(cfg.Metrics.DatagramBytesSent.Load, bandwidth.SamplingConfig{
-		InitialBps: initialBps,
+		InitialBps:   initialBps,
+		SafetyFactor: 1.0,
 	})
 	remoteRate := bandwidth.NewRemote(initialBps)
 	estimator := bandwidth.NewComposite(sentRate, remoteRate)
 	if cfg.Policy == nil {
-		cfg.Policy = policy.NewRateLimit(estimator, 0)
+		cfg.Policy = policy.NewRateLimit(estimator, 0).WithMetrics(cfg.Metrics)
 	}
+	cfg.Metrics.TargetBps.Store(estimator.TargetBps())
+	log.Printf("edge: policy initialized target_bps=%d sent_initial=%d remote_initial=%d",
+		estimator.TargetBps(), sentRate.TargetBps(), remoteRate.TargetBps())
+
+	// Refresh TargetBps gauge once per second so /metrics and LogLoop see
+	// the live policy decision, not the startup snapshot.
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				composite := estimator.TargetBps()
+				cfg.Metrics.TargetBps.Store(composite)
+				log.Printf("edge: bw sent_bps=%d remote_bps=%d composite_bps=%d",
+					sentRate.TargetBps(), remoteRate.TargetBps(), composite)
+			}
+		}
+	}()
 
 	udpAddr, err := net.ResolveUDPAddr("udp", cfg.LocalUDPBind)
 	if err != nil {
@@ -292,6 +314,7 @@ func pumpControlIntoBandwidth(
 			}
 			bps := binary.BigEndian.Uint64(msg[4:12])
 			remote.Update(bps)
+			log.Printf("edge: FBCK received bps=%d remote_target=%d", bps, remote.TargetBps())
 		default:
 			// CSTR / RATE / ACTN to local app: reply to last inbound UDP source.
 			dst := lastApp.Load()

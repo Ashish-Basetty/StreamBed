@@ -1,7 +1,9 @@
 # Canonical proxy schedule: stepped tiers with a mid-run loss/latency burst.
-# Picks segments wide enough that 1 Hz metric polling can see the regime
-# clearly. Tiers chosen to bracket the CHNK/EMBD crossover at ~80 kbps.
-- {at_s: 0,   bps: 500000, loss_pct: 0.00, extra_latency_ms: 0}
-- {at_s: 30,  bps: 100000, loss_pct: 0.00, extra_latency_ms: 0}
-- {at_s: 60,  bps: 50000,  loss_pct: 0.02, extra_latency_ms: 80}
-- {at_s: 90,  bps: 25000,  loss_pct: 0.00, extra_latency_ms: 0}
+# Tiers bracket the measured advisor offered load (~7 Mbit/s @ 64×64×3 frames
+# + ~1200-float embedding) so the CHNK/EMBD crossover is visible in the CSV.
+# Tier 1 starts above the offered load so CHNK fully survives; each step
+# tightens to expose the policy preferentially dropping CHNK while EMBD lives.
+- {at_s: 0,   bps: 20000000, loss_pct: 0.00, extra_latency_ms: 0}   # 20 Mbit — CHNK passes freely
+- {at_s: 30,  bps: 2000000,  loss_pct: 0.00, extra_latency_ms: 0}   # 2 Mbit — CHNK starts to throttle
+- {at_s: 60,  bps: 500000,   loss_pct: 0.02, extra_latency_ms: 80}  # 500 kbps + loss/jitter
+- {at_s: 90,  bps: 100000,   loss_pct: 0.00, extra_latency_ms: 0}   # 100 kbps — only EMBD survives

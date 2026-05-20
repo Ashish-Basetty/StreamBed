@@ -1,16 +1,16 @@
 - at_s: 0
-  bps: 500000
+  bps: 20000000
   loss_pct: 0.0
   extra_latency_ms: 0
 - at_s: 30
-  bps: 100000
+  bps: 2000000
   loss_pct: 0.0
   extra_latency_ms: 0
 - at_s: 60
-  bps: 50000
+  bps: 500000
   loss_pct: 0.02
   extra_latency_ms: 80
 - at_s: 90
-  bps: 25000
+  bps: 100000
   loss_pct: 0.0
   extra_latency_ms: 0

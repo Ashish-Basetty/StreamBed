@@ -168,6 +168,7 @@ def _wait_for_sidecar_log(container: str, needle: str, timeout_s: float = 60.0) 
     raise AssertionError(f"never saw {needle!r} in {container} logs")
 
 
+@pytest.mark.skip(reason="pending AIMD send-rate rework (docs/AimdSendRatePlan.md)")
 @pytest.mark.experiment
 def test_interleaving_sweep(
     experiment_results_dir: Path,

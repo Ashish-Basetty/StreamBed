@@ -23,8 +23,14 @@ type Registry struct {
 	HandshakeDoneAt    atomic.Int64
 	RTTNanos           atomic.Int64 // last reported smoothed RTT
 
-	BytesSentByTag map[string]*atomic.Uint64
-	BytesRecvByTag map[string]*atomic.Uint64
+	BytesSentByTag    map[string]*atomic.Uint64
+	BytesRecvByTag    map[string]*atomic.Uint64
+	BytesDroppedByTag map[string]*atomic.Uint64
+
+	// TargetBps is a sampled-by-callers atomic snapshot of the current policy
+	// estimator's target rate in bits/sec. Set from edge.Run; surfaced via
+	// /metrics and the periodic log line. 0 when no estimator is wired.
+	TargetBps atomic.Uint64
 }
 
 // knownTags is the closed set of 4-byte payload tags the sidecar recognizes
@@ -34,12 +40,14 @@ var knownTags = []string{"CHNK", "EMBD", "CSTL", "CSTR", "RATE", "ACTN", "FBCK",
 
 func New() *Registry {
 	r := &Registry{
-		BytesSentByTag: make(map[string]*atomic.Uint64, len(knownTags)),
-		BytesRecvByTag: make(map[string]*atomic.Uint64, len(knownTags)),
+		BytesSentByTag:    make(map[string]*atomic.Uint64, len(knownTags)),
+		BytesRecvByTag:    make(map[string]*atomic.Uint64, len(knownTags)),
+		BytesDroppedByTag: make(map[string]*atomic.Uint64, len(knownTags)),
 	}
 	for _, t := range knownTags {
 		r.BytesSentByTag[t] = &atomic.Uint64{}
 		r.BytesRecvByTag[t] = &atomic.Uint64{}
+		r.BytesDroppedByTag[t] = &atomic.Uint64{}
 	}
 	return r
 }
@@ -67,6 +75,14 @@ func (r *Registry) IncBytesSentByTag(p []byte, n int) {
 // payload's 4-byte prefix.
 func (r *Registry) IncBytesRecvByTag(p []byte, n int) {
 	if c, ok := r.BytesRecvByTag[tagOfPrefix(p)]; ok {
+		c.Add(uint64(n))
+	}
+}
+
+// IncBytesDroppedByTag tracks bytes the policy refused to forward, keyed by
+// the payload's 4-byte tag prefix. Egress drop ledger; recv-side never drops.
+func (r *Registry) IncBytesDroppedByTag(p []byte, n int) {
+	if c, ok := r.BytesDroppedByTag[tagOfPrefix(p)]; ok {
 		c.Add(uint64(n))
 	}
 }
@@ -103,7 +119,9 @@ func (r *Registry) write(w io.Writer) {
 	for _, t := range knownTags {
 		fmt.Fprintf(w, "streambed_sidecar_bytes_sent{tag=%q} %d\n", t, r.BytesSentByTag[t].Load())
 		fmt.Fprintf(w, "streambed_sidecar_bytes_received{tag=%q} %d\n", t, r.BytesRecvByTag[t].Load())
+		fmt.Fprintf(w, "streambed_sidecar_bytes_dropped{tag=%q} %d\n", t, r.BytesDroppedByTag[t].Load())
 	}
+	fmt.Fprintf(w, "streambed_sidecar_target_bps %d\n", r.TargetBps.Load())
 }
 
 // LogLoop emits a single INFO line every interval with the current snapshot.
@@ -111,7 +129,7 @@ func (r *Registry) LogLoop(interval time.Duration, role string) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for range t.C {
-		log.Printf("metrics role=%s dg_sent=%d dg_recv=%d bytes_sent=%d bytes_recv=%d stream_sent=%d stream_recv=%d handshake_ms=%.1f rtt_ms=%.1f",
+		log.Printf("metrics role=%s dg_sent=%d dg_recv=%d bytes_sent=%d bytes_recv=%d stream_sent=%d stream_recv=%d handshake_ms=%.1f rtt_ms=%.1f target_bps=%d sent[CHNK]=%d sent[EMBD]=%d drop[CHNK]=%d drop[CSTL]=%d",
 			role,
 			r.DatagramsSent.Load(),
 			r.DatagramsReceived.Load(),
@@ -121,6 +139,11 @@ func (r *Registry) LogLoop(interval time.Duration, role string) {
 			r.StreamBytesRecv.Load(),
 			r.HandshakeMS(),
 			r.RTTMS(),
+			r.TargetBps.Load(),
+			r.BytesSentByTag["CHNK"].Load(),
+			r.BytesSentByTag["EMBD"].Load(),
+			r.BytesDroppedByTag["CHNK"].Load(),
+			r.BytesDroppedByTag["CSTL"].Load(),
 		)
 	}
 }

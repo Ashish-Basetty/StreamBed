@@ -20,6 +20,13 @@ const feedbackInterval = 2 * time.Second
 // stickier estimate (more lag, less noise).
 const feedbackEWMAAlpha = 0.3
 
+// feedbackInitialBps seeds the smoothed estimate so the first 2 s tick can't
+// emit a near-zero FBCK from EWMA(observed, 0). The edge takes the very first
+// FBCK as ground truth (it doesn't smooth further), so a 48 bps spike collapses
+// the bucket and kills every CHNK forever. Matching the edge-side initial keeps
+// the policy permissive until real samples arrive.
+const feedbackInitialBps uint64 = 20_000_000
+
 // pumpFeedback samples the per-peer received-bytes counter every
 // feedbackInterval, EWMA-smooths the bps, and pushes an FBCK control message
 // to the edge. Caller passes a closure that reads the relevant atomic counter
@@ -35,6 +42,7 @@ func pumpFeedback(
 	prev := bytesRecv()
 	prevTime := time.Now()
 	var smoothed atomic.Uint64
+	smoothed.Store(feedbackInitialBps)
 
 	for {
 		select {
@@ -53,6 +61,8 @@ func pumpFeedback(
 			cur64 := smoothed.Load()
 			next := uint64(feedbackEWMAAlpha*float64(observed) + (1-feedbackEWMAAlpha)*float64(cur64))
 			smoothed.Store(next)
+			log.Printf("server: FBCK recv_bytes=%d elapsed=%.2fs observed_bps=%d smoothed_bps=%d",
+				delta, elapsed, observed, next)
 
 			payload := encodeFBCK(next)
 			if err := conn.SendControl(payload); err != nil {

@@ -22,8 +22,10 @@ import yaml
 # Lines of the form:
 #   streambed_sidecar_bytes_sent{tag="CHNK"} 12345
 _METRIC_RE = re.compile(
-    r'^streambed_sidecar_bytes_(sent|received)\{tag="([A-Z]{4})"\}\s+(\d+)'
+    r'^streambed_sidecar_bytes_(sent|received|dropped)\{tag="([A-Z]{4})"\}\s+(\d+)'
 )
+# Scalar gauge for the policy's current target rate.
+_TARGET_BPS_RE = re.compile(r"^streambed_sidecar_target_bps\s+(\d+)")
 # Advisor server emits e.g.  total_advised=42 (cadence_n=5)
 _ADVISED_RE = re.compile(r"total_advised=(\d+)")
 _CADENCE_RE = re.compile(r"cadence_n=(\d+)")
@@ -36,6 +38,10 @@ class MetricsSample:
     embd_bytes_sent: int = 0
     cstr_bytes_recv: int = 0
     cstl_bytes_sent: int = 0
+    chnk_bytes_dropped: int = 0
+    cstl_bytes_dropped: int = 0
+    fbck_bytes_recv: int = 0
+    target_bps: int = 0
     total_advised: int = 0
     cadence_n: int = 0
     throttle_bps: float = 0.0
@@ -79,7 +85,7 @@ _SCRAPE_PY = (
 
 
 def _scrape_sidecar(scrape_via: str, sidecar_dns: str) -> dict[tuple[str, str], int]:
-    """Return {(sent|received, tag): bytes}.
+    """Return {(sent|received|dropped, tag): bytes, ("gauge","target_bps"): int}.
 
     Scrapes via the co-located daemon container (which lives on the sidecar's
     device network and has Python). The sidecar image is FROM scratch, so we
@@ -94,10 +100,13 @@ def _scrape_sidecar(scrape_via: str, sidecar_dns: str) -> dict[tuple[str, str], 
         return out
     for line in body.splitlines():
         m = _METRIC_RE.match(line)
-        if not m:
+        if m:
+            direction, tag, value = m.group(1), m.group(2), int(m.group(3))
+            out[(direction, tag)] = value
             continue
-        direction, tag, value = m.group(1), m.group(2), int(m.group(3))
-        out[(direction, tag)] = value
+        m = _TARGET_BPS_RE.match(line)
+        if m:
+            out[("gauge", "target_bps")] = int(m.group(1))
     return out
 
 
@@ -164,6 +173,10 @@ class MetricsPoller:
                 # CSTR (advice) flows server→edge over the control stream, so
                 # the edge sidecar is the side that records it on receive.
                 cstr_bytes_recv=edge.get(("received", "CSTR"), 0),
+                chnk_bytes_dropped=edge.get(("dropped", "CHNK"), 0),
+                cstl_bytes_dropped=edge.get(("dropped", "CSTL"), 0),
+                fbck_bytes_recv=edge.get(("received", "FBCK"), 0),
+                target_bps=edge.get(("gauge", "target_bps"), 0),
                 total_advised=advised,
                 cadence_n=cadence,
                 throttle_bps=bps,
@@ -188,9 +201,14 @@ class MetricsPoller:
         path.parent.mkdir(parents=True, exist_ok=True)
         cols = [
             "t_s", "throttle_bps", "loss_pct", "extra_latency_ms", "cadence_n",
+            "target_bps",
             "chnk_bytes_sent", "embd_bytes_sent", "cstl_bytes_sent",
-            "cstr_bytes_recv", "total_advised",
+            "cstr_bytes_recv",
+            "chnk_bytes_dropped", "cstl_bytes_dropped",
+            "fbck_bytes_recv",
+            "total_advised",
             "embd_rate_hz", "chnk_rate_hz", "advice_rate_hz",
+            "chnk_drop_rate_hz",
         ]
         with path.open("w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=cols)
@@ -198,26 +216,32 @@ class MetricsPoller:
             prev: MetricsSample | None = None
             for s in self.samples:
                 if prev is None:
-                    embd_rate = chnk_rate = adv_rate = 0.0
+                    embd_rate = chnk_rate = adv_rate = drop_rate = 0.0
                 else:
                     dt = max(s.t_s - prev.t_s, 1e-6)
                     embd_rate = (s.embd_bytes_sent - prev.embd_bytes_sent) / dt
                     chnk_rate = (s.chnk_bytes_sent - prev.chnk_bytes_sent) / dt
                     adv_rate = (s.total_advised - prev.total_advised) / dt
+                    drop_rate = (s.chnk_bytes_dropped - prev.chnk_bytes_dropped) / dt
                 w.writerow({
                     "t_s": s.t_s,
                     "throttle_bps": s.throttle_bps,
                     "loss_pct": s.loss_pct,
                     "extra_latency_ms": s.extra_latency_ms,
                     "cadence_n": s.cadence_n,
+                    "target_bps": s.target_bps,
                     "chnk_bytes_sent": s.chnk_bytes_sent,
                     "embd_bytes_sent": s.embd_bytes_sent,
                     "cstl_bytes_sent": s.cstl_bytes_sent,
                     "cstr_bytes_recv": s.cstr_bytes_recv,
+                    "chnk_bytes_dropped": s.chnk_bytes_dropped,
+                    "cstl_bytes_dropped": s.cstl_bytes_dropped,
+                    "fbck_bytes_recv": s.fbck_bytes_recv,
                     "total_advised": s.total_advised,
                     "embd_rate_hz": round(embd_rate, 2),
                     "chnk_rate_hz": round(chnk_rate, 2),
                     "advice_rate_hz": round(adv_rate, 2),
+                    "chnk_drop_rate_hz": round(drop_rate, 2),
                 })
                 prev = s
 

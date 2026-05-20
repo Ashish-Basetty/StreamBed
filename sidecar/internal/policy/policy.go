@@ -10,6 +10,7 @@ import (
 
 	"github.com/streambed/sidecar/internal/bandwidth"
 	"github.com/streambed/sidecar/internal/common"
+	"github.com/streambed/sidecar/internal/metrics"
 )
 
 // Policy decides what to do with each outbound payload.
@@ -40,6 +41,7 @@ func Passthrough() Policy { return passthrough{} }
 type RateLimit struct {
 	estimator bandwidth.Estimator
 	burst     uint64
+	metrics   *metrics.Registry // optional drop ledger
 
 	mu          sync.Mutex
 	tokens      float64
@@ -52,6 +54,13 @@ func NewRateLimit(estimator bandwidth.Estimator, burstBytes uint64) *RateLimit {
 		estimator: estimator,
 		burst:     burstBytes,
 	}
+}
+
+// WithMetrics attaches a metrics registry so dropped CHNK/CSTL bytes get
+// counted into BytesDroppedByTag. Optional — nil registry means no accounting.
+func (r *RateLimit) WithMetrics(m *metrics.Registry) *RateLimit {
+	r.metrics = m
+	return r
 }
 
 func (r *RateLimit) OnEgress(p []byte) []byte {
@@ -91,6 +100,9 @@ func (r *RateLimit) OnEgress(p []byte) []byte {
 	if kind == common.KindLossyData {
 		// CHNK only: drop if the bucket can't pay for it.
 		if r.tokens < cost {
+			if r.metrics != nil {
+				r.metrics.IncBytesDroppedByTag(p, len(p))
+			}
 			return nil
 		}
 		r.tokens -= cost

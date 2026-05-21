@@ -10,14 +10,17 @@ rate limiting on datagrams. Most bugs are fixed. One major blocker remains.
 
 ## What's Working
 
-1. **QUIC relay proxy** (`tests/varying_proxy/proxy.py`) — fully rewritten from
-   a broken UDP forwarder to a proper two-QUIC-connection relay using aioquic.
-   - Inbound: QUIC server (edge dials proxy) with self-signed cert
-   - Outbound: QUIC client (proxy dials server) with `ssl.CERT_NONE`
-   - ALPN: `streambed-quic-v1` on both sides — **must match** quic-go's ALPN
-   - Token-bucket rate limiting on edge→server datagrams only
+1. **UDP forwarder proxy** (`tests/varying_proxy/proxy.py`) — rewritten again
+   as a transparent UDP relay. QUIC is **not** terminated; the edge↔server
+   QUIC session runs end-to-end and the proxy just shapes the underlying UDP
+   packet stream.
+   - Inbound: UDP socket on `BIND_PORT` (default 9010)
+   - Outbound: per-edge-client UDP socket to `target_host:target_port`
+   - Token-bucket rate limiting on edge→server packets; return path unthrottled
+   - Loss model + per-packet extra latency from the schedule
    - Schedule (bps/loss_pct/latency) loaded from `tests/experiments/runtime/schedule.yml`
    - Target (server address) loaded from `tests/experiments/runtime/target.yml`
+   - Idle flow reaper drops dead clients and forces reconnect when target.yml changes
 
 2. **Sidecar image `ashishbasetty/streambed-quic-sidecar:experiment`** — pushed
    multi-arch (amd64 + arm64) with:
@@ -61,31 +64,18 @@ the experiment proper. Just don't restart it until you want to redeploy.
 
 ---
 
-## Secondary Issue: "control frame too large" Crash
+## Resolved: "control frame too large" Crash
 
-When the edge is routed through the proxy, after ~38 seconds the edge sidecar
-crashes with: `pump exited (control frame too large: 3424760000)`.
+This was a stream-relay corruption bug in the previous aioquic-based proxy:
+terminating QUIC on both sides and remapping stream IDs occasionally delivered
+stream chunks out of order, which the edge then parsed as a giant control
+frame and crashed (`pump exited (control frame too large: 3424760000)`).
 
-This is a stream relay corruption bug. Proxy stream relay debug logging was
-added (in `proxy.py`) to diagnose it. It prints:
-- `[proxy] stream map edge:0→up:0` — stream ID mapping on first event
-- `[proxy] stream↑ edge:0→up:0 Nb hdr=XXXX` — each edge→server stream chunk
-- `[proxy] stream↓ up:0→edge:0 Nb hdr=XXXX` — each server→edge stream chunk
-- `[proxy] stream↓ UNMAPPED up:N ...` — if server sends on unmapped stream
-
-**Current theory**: Not TLS/encryption. Likely a stream data ordering issue
-in the aioquic event relay. The `ensure_future` scheduling might deliver stream
-chunks out of order under load. Also changed `relay_stream_down` to DROP (not
-create new stream) when the upstream stream ID is unmapped — this was sending
-data to a wrong edge stream.
-
-**Debugging steps for next session**:
-1. Bring up stack (see SETUP_PROCEDURE.md)
-2. Check proxy stream logs at the time the crash occurs
-3. Look for `UNMAPPED` events or wrong-order `hdr=` values
-4. If stream relay is fundamentally broken, consider: route QUIC control stream
-   direct and only proxy datagrams — requires sidecar changes to bind data on
-   a separate port.
+**Fix**: stop terminating QUIC at the proxy. The current `proxy.py` is a
+plain UDP forwarder, so edge↔server share one end-to-end QUIC session and
+there are no stream IDs for the proxy to remap. Rate limiting still works
+because dropping UDP packets when the token bucket is empty looks like
+network loss to QUIC, and quic-go's congestion controller responds normally.
 
 ---
 

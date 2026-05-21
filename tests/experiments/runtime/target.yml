@@ -1,2 +1,2 @@
 target_host: host.docker.internal
-target_port: 0
+target_port: 7395

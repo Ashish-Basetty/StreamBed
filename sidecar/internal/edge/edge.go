@@ -51,24 +51,25 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.Metrics = metrics.New()
 	}
 
-	// Seed SentRate's initial estimate to match RemoteRate's default. Otherwise
-	// Composite's min() pins the policy to SamplingConfig.Min (10 kbps) for the
-	// first ~2 s, collapsing the bucket to ~1250 bytes and dropping every CHNK
-	// chunk after the first regardless of actual link capacity. EWMA pulls
-	// SentRate toward the true observed rate as samples arrive.
+	// AIMD owns the policy decision. SentRate is kept as a diagnostic gauge
+	// (logged below) but no longer participates in the rate target — it tracks
+	// what we sent, which is what we let ourselves send, so including it in the
+	// Composite would reintroduce the ratchet-down lock-in AIMD exists to fix.
 	const initialBps = 20_000_000
 	sentRate := bandwidth.NewSampling(cfg.Metrics.DatagramBytesSent.Load, bandwidth.SamplingConfig{
 		InitialBps:   initialBps,
 		SafetyFactor: 1.0,
 	})
-	remoteRate := bandwidth.NewRemote(initialBps)
-	estimator := bandwidth.NewComposite(sentRate, remoteRate)
+	aimdRate := bandwidth.NewAIMD(cfg.Metrics.DatagramBytesSent.Load, bandwidth.AIMDConfig{
+		InitialBps: initialBps,
+	})
+	estimator := bandwidth.NewComposite(aimdRate)
 	if cfg.Policy == nil {
 		cfg.Policy = policy.NewRateLimit(estimator, 0).WithMetrics(cfg.Metrics)
 	}
 	cfg.Metrics.TargetBps.Store(estimator.TargetBps())
-	log.Printf("edge: policy initialized target_bps=%d sent_initial=%d remote_initial=%d",
-		estimator.TargetBps(), sentRate.TargetBps(), remoteRate.TargetBps())
+	log.Printf("edge: policy initialized target_bps=%d sent_initial=%d aimd_initial=%d",
+		estimator.TargetBps(), sentRate.TargetBps(), aimdRate.TargetBps())
 
 	// Refresh TargetBps gauge once per second so /metrics and LogLoop see
 	// the live policy decision, not the startup snapshot.
@@ -82,8 +83,8 @@ func Run(ctx context.Context, cfg Config) error {
 			case <-t.C:
 				composite := estimator.TargetBps()
 				cfg.Metrics.TargetBps.Store(composite)
-				log.Printf("edge: bw sent_bps=%d remote_bps=%d composite_bps=%d",
-					sentRate.TargetBps(), remoteRate.TargetBps(), composite)
+				log.Printf("edge: bw sent_bps=%d aimd_bps=%d composite_bps=%d",
+					sentRate.TargetBps(), aimdRate.TargetBps(), composite)
 			}
 		}
 	}()
@@ -135,12 +136,16 @@ func Run(ctx context.Context, cfg Config) error {
 			continue
 		}
 		log.Printf("edge: QUIC connected to %s", peerAddr)
+		// Full reset on every (re)connect: a route change may put us on a
+		// different network with different capacity, so we don't want to carry
+		// the prior AIMD target across.
+		aimdRate.Reset()
 
 		connCtx, connCancel := context.WithCancel(ctx)
 		var lastAppAddr atomic.Pointer[net.UDPAddr]
 		errc := make(chan error, 2)
 		go func() { errc <- pumpUDPToQUIC(connCtx, udp, conn, cfg, &lastAppAddr) }()
-		go func() { errc <- pumpControlIntoBandwidth(connCtx, conn, remoteRate, udp, &lastAppAddr, cfg.Metrics) }()
+		go func() { errc <- pumpControlIntoBandwidth(connCtx, conn, aimdRate, udp, &lastAppAddr, cfg.Metrics) }()
 
 		var newPeer string
 		select {
@@ -281,13 +286,13 @@ func pumpUDPToQUIC(ctx context.Context, udp *net.UDPConn, conn *quictransport.Co
 }
 
 // pumpControlIntoBandwidth reads control frames from the peer and dispatches
-// by magic. FBCK frames update the RemoteBackend. Non-FBCK frames are written
-// back on the same local UDP socket used for ingress, to the last source
-// address seen from the local inference app (unified port).
+// by magic. FBCK frames drive one AIMD step. Non-FBCK frames are written back
+// on the same local UDP socket used for ingress, to the last source address
+// seen from the local inference app (unified port).
 func pumpControlIntoBandwidth(
 	ctx context.Context,
 	conn *quictransport.Conn,
-	remote *bandwidth.RemoteBackend,
+	aimd *bandwidth.AIMDBackend,
 	udp *net.UDPConn,
 	lastApp *atomic.Pointer[net.UDPAddr],
 	m *metrics.Registry,
@@ -313,8 +318,8 @@ func pumpControlIntoBandwidth(
 				continue
 			}
 			bps := binary.BigEndian.Uint64(msg[4:12])
-			remote.Update(bps)
-			log.Printf("edge: FBCK received bps=%d remote_target=%d", bps, remote.TargetBps())
+			aimd.OnFeedback(bps)
+			log.Printf("edge: FBCK received_bps=%d aimd_target=%d", bps, aimd.TargetBps())
 		default:
 			// CSTR / RATE / ACTN to local app: reply to last inbound UDP source.
 			dst := lastApp.Load()
